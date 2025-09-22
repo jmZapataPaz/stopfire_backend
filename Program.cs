@@ -6,10 +6,7 @@ using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container.
-
 builder.Services.AddControllers();
-// Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
@@ -24,7 +21,9 @@ builder.Services.AddCors(options =>
 });
 
 var cs = builder.Configuration.GetConnectionString("StopFireDb");
-builder.Services.AddDbContext<StopFireDbContext>(opt => opt.UseNpgsql(cs));
+builder.Services.AddDbContext<StopFireDbContext>(opt =>
+    opt.UseNpgsql(cs, o => o.UseNetTopologySuite())); 
+
 builder.Services
     .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
@@ -35,8 +34,8 @@ builder.Services
             ValidateIssuer = true,
             ValidateAudience = true,
             ValidateIssuerSigningKey = true,
-            ValidateLifetime = false,          
-            RequireExpirationTime = false,     
+            ValidateLifetime = false,
+            RequireExpirationTime = false,
             ValidIssuer = jwt["Issuer"],
             ValidAudience = jwt["Audience"],
             IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwt["Key"]!))
@@ -57,7 +56,7 @@ if (app.Environment.IsDevelopment())
 }
 app.UseHttpsRedirection();
 app.UseCors("CorsPolicy");
-app.UseAuthentication(); 
+app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
 app.Run();

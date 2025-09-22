@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.Text.Json;
 
 namespace stopfire_backend.Dtos.admin;
 
@@ -17,4 +18,7 @@ public class AdminActualizarEstacionDto
     [Required] public bool Estado { get; set; }
 
     public int? IdUsuario { get; set; }
+
+    
+    public JsonElement? CoberturaGeoJson { get; set; }
 }

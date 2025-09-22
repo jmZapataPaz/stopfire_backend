@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using NetTopologySuite.Geometries;
 
 namespace StopFire.Api.Models;
 
@@ -13,4 +14,6 @@ public class Estacion
     public string? Celular { get; set; }
     public bool Estado { get; set; } = true;
 
+    [JsonIgnore] 
+    public Polygon? Cobertura { get; set; }
 }

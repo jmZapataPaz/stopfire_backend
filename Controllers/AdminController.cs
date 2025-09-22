@@ -6,6 +6,10 @@ using StopFire.Api.Models;
 using stopfire_backend.Dtos.admin;
 using System.Security.Claims;
 using System.IdentityModel.Tokens.Jwt; 
+using NetTopologySuite.Geometries;
+using System.Text.Json;
+using NetTopologySuite.IO;
+using System.Text.Json.Nodes;
 
 namespace StopFire.Api.Controllers;
 
@@ -125,17 +129,21 @@ public class AdminController : ControllerBase
     public async Task<IActionResult> CrearEstacion([FromBody] AdminCrearEstacionDto dto, CancellationToken ct)
     {
         if (!ModelState.IsValid) return ValidationProblem(ModelState);
-
-        var userIdStr =
+        var tokenUserIdStr =
             User.FindFirstValue(ClaimTypes.NameIdentifier) ??
             User.FindFirstValue(JwtRegisteredClaimNames.Sub) ??
             User.FindFirstValue("sub");
-
-        if (string.IsNullOrWhiteSpace(userIdStr) || !int.TryParse(userIdStr, out var userId))
+        if (string.IsNullOrWhiteSpace(tokenUserIdStr) || !int.TryParse(tokenUserIdStr, out var tokenUserId))
             return Unauthorized(new { mensaje = "No se pudo determinar el usuario desde el token." });
-
+        var userId = dto.IdUsuario ?? tokenUserId;
         var existeUsuario = await _db.Usuarios.AnyAsync(u => u.Id == userId, ct);
-        if (!existeUsuario) return Unauthorized(new { mensaje = "Usuario no válido." });
+        if (!existeUsuario) return BadRequest(new { mensaje = "IdUsuario no existe." });
+            var geoJsonText = dto.CoberturaGeoJson.GetRawText();
+            var reader = new GeoJsonReader();
+            var geom = reader.Read<Geometry>(geoJsonText);
+        if (geom is not Polygon poly)
+            return BadRequest(new { mensaje = "CoberturaGeoJson debe ser un GeoJSON de tipo Polygon." });
+        poly.SRID = 4326;
 
         var estacion = new Estacion
         {
@@ -145,7 +153,8 @@ public class AdminController : ControllerBase
             Longitud = dto.Longitud.Trim(),
             DescripcionDireccion = dto.DescripcionDireccion.Trim(),
             Celular = string.IsNullOrWhiteSpace(dto.Celular) ? null : dto.Celular.Trim(),
-            Estado = dto.Estado ?? true
+            Estado = dto.Estado ?? true,
+            Cobertura = poly
         };
 
         _db.Estaciones.Add(estacion);
@@ -157,10 +166,24 @@ public class AdminController : ControllerBase
     [HttpGet("estaciones")]
     public async Task<IActionResult> ListarEstaciones(CancellationToken ct)
     {
-        var datos = await _db.Estaciones
+        var estaciones = await _db.Estaciones
             .AsNoTracking()
             .OrderBy(e => e.Id)
             .ToListAsync(ct);
+
+        var writer = new GeoJsonWriter();
+        var datos = estaciones.Select(e => new
+        {
+            e.Id,
+            e.IdUsuario,
+            e.Nombre,
+            e.Latitud,
+            e.Longitud,
+            e.DescripcionDireccion,
+            e.Celular,
+            e.Estado,
+            cobertura = e.Cobertura is null ? null : JsonNode.Parse(writer.Write(e.Cobertura))
+        });
 
         return Ok(datos);
     }
@@ -170,7 +193,22 @@ public class AdminController : ControllerBase
     {
         var e = await _db.Estaciones.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id, ct);
         if (e is null) return NotFound();
-        return Ok(e);
+
+        var writer = new GeoJsonWriter();
+        var dto = new
+        {
+            e.Id,
+            e.IdUsuario,
+            e.Nombre,
+            e.Latitud,
+            e.Longitud,
+            e.DescripcionDireccion,
+            e.Celular,
+            e.Estado,
+            cobertura = e.Cobertura is null ? null : JsonNode.Parse(writer.Write(e.Cobertura))
+        };
+
+        return Ok(dto);
     }
 
     [HttpPut("estaciones/{id:int}")]
@@ -193,7 +231,25 @@ public class AdminController : ControllerBase
         e.Longitud = dto.Longitud.Trim();
         e.DescripcionDireccion = dto.DescripcionDireccion.Trim();
         e.Celular = string.IsNullOrWhiteSpace(dto.Celular) ? null : dto.Celular.Trim();
-        e.Estado = dto.Estado; 
+        e.Estado = dto.Estado;
+
+        if (dto.CoberturaGeoJson.HasValue)
+        {
+            if (dto.CoberturaGeoJson.Value.ValueKind == JsonValueKind.Null)
+            {
+                e.Cobertura = null; 
+            }
+            else if (dto.CoberturaGeoJson.Value.ValueKind != JsonValueKind.Undefined)
+            {
+                var geoJsonText = dto.CoberturaGeoJson.Value.GetRawText();
+                var reader = new GeoJsonReader();
+                var geom = reader.Read<Geometry>(geoJsonText);
+                if (geom is not Polygon poly)
+                    return BadRequest(new { mensaje = "CoberturaGeoJson debe ser un GeoJSON de tipo Polygon." });
+                poly.SRID = 4326;
+                e.Cobertura = poly;
+            }
+        }
 
         await _db.SaveChangesAsync(ct);
         return NoContent();

@@ -47,13 +47,16 @@ public class StopFireDbContext : DbContext
             b.Property(x => x.Id).HasColumnName("id").ValueGeneratedOnAdd();
             b.Property(x => x.IdUsuario).HasColumnName("id_usuario").IsRequired();
             b.Property(x => x.Nombre).HasColumnName("nombre").IsRequired();
-            b.Property(x => x.Latitud).HasColumnName("latitud").HasMaxLength(255);
-            b.Property(x => x.Longitud).HasColumnName("longitud").HasMaxLength(255);
+            b.Property(x => x.Latitud).HasColumnName("latitud").HasMaxLength(255).IsRequired();
+            b.Property(x => x.Longitud).HasColumnName("longitud").HasMaxLength(255).IsRequired();
             b.Property(x => x.DescripcionDireccion).HasColumnName("descripcion_direccion").IsRequired();
             b.Property(x => x.Celular).HasColumnName("celular").IsRequired();
             b.Property(x => x.Estado).HasColumnName("estado").IsRequired();
-
-
+            b.Property(x => x.Cobertura)
+                .HasColumnName("cobertura")
+                .HasColumnType("geometry(Polygon,4326)")
+                .IsRequired(false);
+            
         });
     }
 }

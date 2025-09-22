@@ -7,6 +7,8 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
+using System.Text.Json.Nodes;
+using NetTopologySuite.IO;
 
 namespace StopFire.Api.Controllers;
 
@@ -155,5 +157,53 @@ public class UsuariosController : ControllerBase
         );
 
         return new JwtSecurityTokenHandler().WriteToken(token);
+    }
+
+    [HttpGet("estaciones")]
+    public async Task<IActionResult> ListarEstacionesPublic(CancellationToken ct)
+    {
+        var estaciones = await _db.Estaciones
+            .AsNoTracking()
+            .OrderBy(e => e.Id)
+            .ToListAsync(ct);
+
+        var writer = new GeoJsonWriter();
+        var datos = estaciones.Select(e => new
+        {
+            e.Id,
+            e.IdUsuario,
+            e.Nombre,
+            e.Latitud,
+            e.Longitud,
+            e.DescripcionDireccion,
+            e.Celular,
+            e.Estado,
+            cobertura = e.Cobertura is null ? null : JsonNode.Parse(writer.Write(e.Cobertura))
+        });
+
+        return Ok(datos);
+    }
+
+    [HttpGet("estaciones/{id:int}")]
+    public async Task<IActionResult> ObtenerEstacionPublicaPorId(int id, CancellationToken ct)
+    {
+        var e = await _db.Estaciones.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id, ct);
+        if (e is null) return NotFound();
+
+        var writer = new GeoJsonWriter();
+        var dto = new
+        {
+            e.Id,
+            e.IdUsuario,
+            e.Nombre,
+            e.Latitud,
+            e.Longitud,
+            e.DescripcionDireccion,
+            e.Celular,
+            e.Estado,
+            cobertura = e.Cobertura is null ? null : JsonNode.Parse(writer.Write(e.Cobertura))
+        };
+
+        return Ok(dto);
     }
 }
