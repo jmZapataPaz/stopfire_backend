@@ -9,6 +9,10 @@ using Microsoft.IdentityModel.Tokens;
 using System.Text;
 using System.Text.Json.Nodes;
 using NetTopologySuite.IO;
+using Microsoft.Extensions.Caching.Memory;
+using StopFire.Api.Services;
+using System.Security.Cryptography;
+using stopfire_backend.Models;
 
 namespace StopFire.Api.Controllers;
 
@@ -18,53 +22,15 @@ public class UsuariosController : ControllerBase
 {
     private readonly StopFireDbContext _db;
     private readonly IConfiguration _config;
+    private readonly IMemoryCache _cache;
+    private readonly IEmailSender _emailSender;
 
-    public UsuariosController(StopFireDbContext db, IConfiguration config)
+    public UsuariosController(StopFireDbContext db, IConfiguration config, IMemoryCache cache, IEmailSender emailSender)
     {
         _db = db;
         _config = config;
-    }
-
-    [HttpPost("registrar")]
-    public async Task<IActionResult> Registrar([FromBody] RegistrarUsuarioDto dto, CancellationToken ct)
-    {
-        if (!ModelState.IsValid)
-            return ValidationProblem(ModelState);
-
-        var correo = dto.Correo.Trim().ToLowerInvariant();
-        var ci = dto.Ci.Trim();
-        var existe = await _db.Usuarios
-            .AnyAsync(u => u.Correo.ToLower() == correo || u.Ci == ci, ct);
-
-        if (existe)
-            return Conflict(new { mensaje = "Ya existe un usuario con ese correo o CI." });
-
-        var hash = BCrypt.Net.BCrypt.HashPassword(dto.Contrasena);
-        var usuario = new Usuario
-        {
-            Nombre = dto.Nombre.Trim(),
-            Apellido = dto.Apellido.Trim(),
-            Ci = ci,
-            Correo = correo,
-            Celular = string.IsNullOrWhiteSpace(dto.Celular) ? null : dto.Celular.Trim(),
-            Contrasena = hash,
-            RolId = 3
-        };
-
-        _db.Usuarios.Add(usuario);
-        await _db.SaveChangesAsync(ct);
-        var result = new
-        {
-            usuario.Id,
-            usuario.Nombre,
-            usuario.Apellido,
-            usuario.Ci,
-            usuario.Correo,
-            usuario.Celular,
-            usuario.RolId
-        };
-
-        return CreatedAtAction(nameof(ObtenerPorId), new { id = usuario.Id }, result);
+        _cache = cache;
+        _emailSender = emailSender;
     }
 
     [HttpPost("login")]
@@ -205,5 +171,89 @@ public class UsuariosController : ControllerBase
         };
 
         return Ok(dto);
+    }
+
+
+    [HttpPost("registrar/iniciar")]
+    public async Task<IActionResult> RegistrarIniciar([FromBody] RegistrarUsuarioDto dto, CancellationToken ct)
+    {
+        if (!ModelState.IsValid) return ValidationProblem(ModelState);
+
+        var correo = dto.Correo.Trim().ToLowerInvariant();
+        var ci = dto.Ci.Trim();
+
+        var existe = await _db.Usuarios.AsNoTracking()
+            .AnyAsync(u => u.Correo.ToLower() == correo || u.Ci == ci, ct);
+        if (existe) return Conflict(new { mensaje = "Ya existe un usuario con ese correo o CI." });
+
+        var otp = RandomNumberGenerator.GetInt32(100000, 1000000).ToString();
+        var hash = BCrypt.Net.BCrypt.HashPassword(dto.Contrasena);
+
+        var key = $"reg:{correo}";
+        var payload = new PendingRegistration
+        {
+            Nombre = dto.Nombre.Trim(),
+            Apellido = dto.Apellido.Trim(),
+            Ci = ci,
+            Correo = correo,
+            Celular = string.IsNullOrWhiteSpace(dto.Celular) ? null : dto.Celular.Trim(),
+            PasswordHash = hash,
+            RolId = 3,
+            Otp = otp
+        };
+        _cache.Set(key, payload, TimeSpan.FromMinutes(10));
+
+        var asunto = "Código de verificación (OTP)";
+        var cuerpo = $@"<p>Hola {dto.Nombre},</p>
+                        <p>Tu código de verificación es: <b>{otp}</b></p>
+                        <p>Vence en 10 minutos.</p>";
+        await _emailSender.SendAsync(correo, asunto, cuerpo, ct);
+
+        return Accepted(new { mensaje = "OTP enviado al correo. Verifica para completar el registro." });
+    }
+
+    [HttpPost("registrar/verificar")]
+    public async Task<IActionResult> RegistrarVerificar([FromBody] VerificarOtpDto dto, CancellationToken ct)
+    {
+        if (!ModelState.IsValid) return ValidationProblem(ModelState);
+
+        var correo = dto.Correo.Trim().ToLowerInvariant();
+        var key = $"reg:{correo}";
+        if (!_cache.TryGetValue<PendingRegistration>(key, out var data))
+            return BadRequest(new { mensaje = "Solicitud no encontrada o OTP expirado." });
+
+        if (!string.Equals(dto.Codigo?.Trim(), data.Otp, StringComparison.Ordinal))
+            return BadRequest(new { mensaje = "OTP inválido." });
+
+        var existe = await _db.Usuarios.AsNoTracking()
+            .AnyAsync(u => u.Correo.ToLower() == correo || u.Ci == data.Ci, ct);
+        if (existe) return Conflict(new { mensaje = "Ya existe un usuario con ese correo o CI." });
+
+        var usuario = new Usuario
+        {
+            Nombre = data.Nombre,
+            Apellido = data.Apellido,
+            Ci = data.Ci,
+            Correo = data.Correo,
+            Celular = data.Celular,
+            Contrasena = data.PasswordHash,
+            RolId = data.RolId
+        };
+
+        _db.Usuarios.Add(usuario);
+        await _db.SaveChangesAsync(ct);
+        _cache.Remove(key);
+
+        var result = new
+        {
+            usuario.Id,
+            usuario.Nombre,
+            usuario.Apellido,
+            usuario.Ci,
+            usuario.Correo,
+            usuario.Celular,
+            usuario.RolId
+        };
+        return CreatedAtAction(nameof(ObtenerPorId), new { id = usuario.Id }, result);
     }
 }
