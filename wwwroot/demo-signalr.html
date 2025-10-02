@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<title>Demo SignalR - Reportes / Estaciones</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<style>
+ body { font-family: system-ui, Arial, sans-serif; margin: 1.2rem; background:#f7f7f7; }
+ fieldset { margin-bottom:1rem; padding:1rem; background:#fff; border:1px solid #ccc; }
+ legend { font-weight:600; }
+ label { display:block; margin-top:.4rem; font-size:.85rem; text-transform:uppercase; letter-spacing:.05em; }
+ input[type=text], input[type=email], input[type=number], input[type=password] { width:100%; padding:.45rem; }
+ input[type=file] { margin-top:.4rem; }
+ button { margin-top:.6rem; cursor:pointer; padding:.5rem .9rem; }
+ #log { background:#000; color:#0f0; padding:.6rem; height:260px; overflow:auto; font:12px monospace; }
+ .ok { color:green; }
+ .err { color:#c00; }
+ .pill { display:inline-block; background:#444; color:#fff; padding:2px 6px; margin:2px; border-radius:4px; font-size:11px;}
+</style>
+</head>
+<body>
+
+<h2>Demo tiempo real - Asignaci�n de Reportes a Estaciones</h2>
+
+<fieldset>
+ <legend>1. Configuraci�n b�sica</legend>
+ <label>Base URL (API)</label>
+ <input id="baseUrl" type="text" value="https://localhost:5190" />
+ <div style="margin-top:.5rem;font-size:.8rem">
+   Aseg�rate de que coincida con tu backend (HTTPS si tu Kestrel lo expone).
+ </div>
+</fieldset>
+
+<fieldset>
+ <legend>2. Login (usuario due�o de la estaci�n)</legend>
+ <label>Correo</label>
+ <input id="loginCorreo" type="email" value="" placeholder="due�o.estacion@correo.com" />
+ <label>Contrase�a</label>
+ <input id="loginPass" type="password" placeholder="********" />
+ <button onclick="login()">Login</button>
+ <div>Token: <span id="tokenPreview" class="pill">---</span></div>
+</fieldset>
+
+<fieldset>
+ <legend>3. Conectar Hub y unirse a Estaci�n</legend>
+ <label>ID Estaci�n (que pertenezca a este usuario)</label>
+ <input id="estacionId" type="number" placeholder="11" />
+ <button onclick="conectarHub()">Conectar Hub</button>
+ <button onclick="joinEstacion()">JoinEstacion</button>
+ <button onclick="leaveEstacion()">LeaveEstacion</button>
+ <div>Estado Hub: <span id="hubState" class="pill">Desconectado</span></div>
+</fieldset>
+
+<fieldset>
+ <legend>4. Crear Reporte (puede hacerse con otro usuario en otra pesta�a)</legend>
+ <label>Latitud</label>
+ <input id="repLat" type="text" value="-17.8000" />
+ <label>Longitud</label>
+ <input id="repLon" type="text" value="-63.1900" />
+ <label>Descripci�n (>=2 chars o d�jalo vac�o)</label>
+ <input id="repDesc" type="text" value="Incendio en pastizal" />
+ <label>Foto (obligatoria)</label>
+ <input id="repFoto" type="file" accept="image/png,image/jpeg,image/webp" />
+ <button onclick="crearReporte()">Enviar Reporte</button>
+</fieldset>
+
+<fieldset>
+ <legend>5. Eventos Recibidos / Log</legend>
+ <div id="log"></div>
+</fieldset>
+
+<script>
+let token = null;
+let connection = null;
+
+function log(msg, cls) {
+  const div = document.getElementById('log');
+  const pre = document.createElement('div');
+  pre.className = cls || '';
+  const ts = new Date().toISOString().substring(11,19);
+  pre.textContent = `[${ts}] ${msg}`;
+  div.appendChild(pre);
+  div.scrollTop = div.scrollHeight;
+}
+
+async function login() {
+  try {
+    const base = document.getElementById('baseUrl').value.trim();
+    const correo = document.getElementById('loginCorreo').value.trim();
+    const contrasena = document.getElementById('loginPass').value;
+
+    const res = await fetch(`${base}/api/usuarios/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ correo, contrasena })
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(()=>({}));
+      throw new Error('Login fallo: ' + JSON.stringify(err));
+    }
+
+    const data = await res.json();
+    token = data.token;
+    document.getElementById('tokenPreview').textContent = token.substring(0,24) + '...';
+    log('Login OK. Usuario id=' + data.usuario.id, 'ok');
+  } catch (e) {
+    log(e.message, 'err');
+  }
+}
+
+async function conectarHub() {
+  if (!token) {
+    log('Primero haz login.', 'err');
+    return;
+  }
+  if (connection && connection.state !== 'Disconnected') {
+    log('Ya conectado.', 'ok');
+    return;
+  }
+  const base = document.getElementById('baseUrl').value.trim();
+
+  connection = new signalR.HubConnectionBuilder()
+    .withUrl(`${base}/hubs/notificaciones`, {
+      accessTokenFactory: () => token
+    })
+    .withAutomaticReconnect()
+    .build();
+
+  connection.onreconnecting(err => {
+    document.getElementById('hubState').textContent = 'Reconectando';
+    log('Reconnecting: ' + err, 'err');
+  });
+  connection.onreconnected(() => {
+    document.getElementById('hubState').textContent = 'Conectado';
+    log('Reconnected', 'ok');
+  });
+  connection.onclose(() => {
+    document.getElementById('hubState').textContent = 'Desconectado';
+    log('Conexi�n cerrada');
+  });
+
+  connection.on('ReporteAsignado', payload => {
+    log('Evento ReporteAsignado: ' + JSON.stringify(payload));
+  });
+
+  try {
+    await connection.start();
+    document.getElementById('hubState').textContent = 'Conectado';
+    log('Hub conectado.', 'ok');
+  } catch (e) {
+    log('Error al conectar hub: ' + e, 'err');
+  }
+}
+
+async function joinEstacion() {
+  if (!connection || connection.state !== 'Connected') {
+    log('Hub no conectado.', 'err');
+    return;
+  }
+  const id = parseInt(document.getElementById('estacionId').value, 10);
+  if (!id) {
+    log('Ingresa un idEstacion v�lido.', 'err');
+    return;
+  }
+  try {
+    await connection.invoke('JoinEstacion', id);
+    log('Unido a grupo estacion_' + id, 'ok');
+  } catch (e) {
+    log('JoinEstacion error: ' + e, 'err');
+  }
+}
+
+async function leaveEstacion() {
+  if (!connection || connection.state !== 'Connected') {
+    log('Hub no conectado.', 'err');
+    return;
+  }
+  const id = parseInt(document.getElementById('estacionId').value, 10);
+  if (!id) {
+    log('Ingresa un idEstacion v�lido.', 'err');
+    return;
+  }
+  try {
+    await connection.invoke('LeaveEstacion', id);
+    log('Saliste de estacion_' + id, 'ok');
+  } catch (e) {
+    log('LeaveEstacion error: ' + e, 'err');
+  }
+}
+
+async function crearReporte() {
+  if (!token) {
+    log('Necesitas token para crear reporte.', 'err');
+    return;
+  }
+  const base = document.getElementById('baseUrl').value.trim();
+  const lat = document.getElementById('repLat').value.trim();
+  const lon = document.getElementById('repLon').value.trim();
+  const desc = document.getElementById('repDesc').value.trim();
+  const foto = document.getElementById('repFoto').files[0];
+  if (!foto) {
+    log('Selecciona una foto.', 'err');
+    return;
+  }
+
+  const fd = new FormData();
+  fd.append('Latitud', lat);
+  fd.append('Longitud', lon);
+  if (desc.length >= 2) fd.append('Descripcion', desc);
+  fd.append('Foto', foto);
+
+  try {
+    const res = await fetch(`${base}/api/Usuarios/reportes`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}` },
+      body: fd
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(()=>({}));
+      throw new Error('Error crear reporte: ' + JSON.stringify(err));
+    }
+    const data = await res.json();
+    log('Reporte creado id=' + data.id + (data.asignacion ? ' asignado a estaci�n ' + data.asignacion.idEstacion : ' (sin asignaci�n)'), 'ok');
+  } catch (e) {
+    log(e.message, 'err');
+  }
+}
+</script>
+</body>
+</html>

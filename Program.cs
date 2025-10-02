@@ -4,6 +4,10 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
 using StopFire.Api.Services;
+using StopFire.Api.Hubs;
+using NetTopologySuite;
+using NetTopologySuite.Geometries;
+using Microsoft.AspNetCore.SignalR;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -19,7 +23,12 @@ builder.Services.AddSwaggerGen();
 
 builder.Services.AddCors(o =>
 {
-    o.AddPolicy("CorsPolicy", p => p.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod());
+    o.AddPolicy("CorsPolicy", p => p
+        .SetIsOriginAllowed(_ => true)          // acepta cualquier origen (dev)
+        .AllowAnyHeader()
+        .AllowAnyMethod()
+        .AllowCredentials()                     // necesario con Authorization
+    );
 });
 
 builder.Services.AddMemoryCache();
@@ -45,12 +54,29 @@ builder.Services
             ValidAudience = jwt["Audience"],
             IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwt["Key"]!))
         };
+        // NECESARIO PARA SIGNALR (token via query access_token)
+        options.Events = new JwtBearerEvents
+        {
+            OnMessageReceived = ctx =>
+            {
+                var accessToken = ctx.Request.Query["access_token"];
+                var path = ctx.HttpContext.Request.Path;
+                if (!string.IsNullOrEmpty(accessToken) && path.StartsWithSegments("/hubs/notificaciones"))
+                {
+                    ctx.Token = accessToken;
+                }
+                return Task.CompletedTask;
+            }
+        };
     });
 
 builder.Services.AddAuthorization(o =>
 {
     o.AddPolicy("AdminOnly", p => p.RequireClaim("role_id", "1"));
 });
+
+builder.Services.AddSignalR();
+builder.Services.AddSingleton(NtsGeometryServices.Instance.CreateGeometryFactory(srid: 4326));
 
 var app = builder.Build();
 
@@ -60,10 +86,28 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-app.UseHttpsRedirection();
-
+//app.UseHttpsRedirection(); // Comentado para evitar redirección a https sin endpoint
+app.UseStaticFiles();
 app.UseCors("CorsPolicy");
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
+
+app.MapHub<NotificacionesHub>("/hubs/notificaciones");
+
+// DEBUG: forzar evento
+app.MapPost("/debug/send-reporte", async (IHubContext<NotificacionesHub> hub) =>
+{
+    var dto = new {
+        Id = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        Descripcion = "REPORTE DEBUG",
+        Latitud = -17.78,
+        Longitud = -63.18,
+        ImagenUrl = "",
+        CreadoEn = DateTime.UtcNow
+    };
+    await hub.Clients.All.SendAsync("ReporteCreado", dto);
+    return Results.Ok(dto);
+});
+
 app.Run();
