@@ -1,17 +1,41 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
-using StopFire.Api.Models;
-using System.Security.Claims;
 using NetTopologySuite.Geometries;
-using System.Globalization;
+using StopFire.Api.Data;
+using StopFire.Api.Hubs;
+using StopFire.Api.Models;
 using System.Collections.Concurrent;
+using System.Security.Claims;
 
 namespace StopFire.Api.Controllers;
 
-public partial class UsuariosController
+[ApiController]
+[Route("api/bombero")]
+[Authorize(Policy = "BomberoOnly")]
+public class BomberoController : ControllerBase
 {
+    private readonly StopFireDbContext _db;
+    private readonly IHubContext<NotificacionesHub> _hub;
+    private readonly GeometryFactory _geometryFactory;
     private static readonly ConcurrentDictionary<int, HashSet<int>> _rechazosPorReporte = new();
+
+    public BomberoController(
+        StopFireDbContext db,
+        IHubContext<NotificacionesHub> hub,
+        GeometryFactory geometryFactory)
+    {
+        _db = db;
+        _hub = hub;
+        _geometryFactory = geometryFactory;
+    }
+
+    private static int? GetUserId(ClaimsPrincipal user)
+    {
+        var s = user.FindFirstValue(ClaimTypes.NameIdentifier) ?? user.FindFirstValue("sub");
+        return int.TryParse(s, out var id) ? id : null;
+    }
 
     private async Task<List<Estacion>> ObtenerEstacionesOrdenadasAsync(Reporte reporte, CancellationToken ct)
     {
@@ -22,22 +46,18 @@ public partial class UsuariosController
             .Where(e => e.Estado && e.Cobertura != null && e.Cobertura.Contains(point))
             .ToListAsync(ct);
 
-        List<Estacion> orden;
         if (contenedoras.Count > 0)
         {
-            orden = contenedoras
+            return contenedoras
                 .OrderBy(e => e.Cobertura!.Centroid.Distance(point))
                 .ToList();
         }
-        else
-        {
-            orden = await _db.Estaciones
-                .AsNoTracking()
-                .Where(e => e.Estado && e.Cobertura != null)
-                .OrderBy(e => e.Cobertura!.Distance(point))
-                .ToListAsync(ct);
-        }
-        return orden;
+
+        return await _db.Estaciones
+            .AsNoTracking()
+            .Where(e => e.Estado && e.Cobertura != null)
+            .OrderBy(e => e.Cobertura!.Distance(point))
+            .ToListAsync(ct);
     }
 
     private async Task<Estacion?> ObtenerSiguienteCandidataAsync(Reporte reporte, CancellationToken ct)
@@ -46,6 +66,7 @@ public partial class UsuariosController
         var ordenPrimario = await ObtenerEstacionesOrdenadasAsync(reporte, ct);
         var candidata = ordenPrimario.FirstOrDefault(e => !rechazadas.Contains(e.Id));
         if (candidata != null) return candidata;
+
         var point = _geometryFactory.CreatePoint(new Coordinate(reporte.Longitud!.Value, reporte.Latitud!.Value));
         var fallback = await _db.Estaciones
             .AsNoTracking()
@@ -57,18 +78,18 @@ public partial class UsuariosController
     }
 
     [HttpPost("reportes/{id:int}/aceptar")]
-    [Authorize]
     public async Task<IActionResult> AceptarReporte(int id, CancellationToken ct)
     {
-        var uidStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
-        if (!int.TryParse(uidStr, out var uid)) return Unauthorized();
+        var uid = GetUserId(User);
+        if (uid is null) return Unauthorized();
+
         var reporte = await _db.Reportes.FirstOrDefaultAsync(r => r.Id == id, ct);
         if (reporte == null) return NotFound();
         if (reporte.Estado == "ACEPTADO") return Ok(new { mensaje = "Ya aceptado." });
+
         var siguiente = await ObtenerSiguienteCandidataAsync(reporte, ct);
         if (siguiente == null) return BadRequest(new { mensaje = "No hay estación candidata." });
-        if (siguiente.IdUsuario != uid)
-            return Forbid("La estación candidata no pertenece al usuario.");
+        if (siguiente.IdUsuario != uid.Value) return Forbid("La estación candidata no pertenece al usuario.");
 
         var asign = new Asignacion
         {
@@ -106,22 +127,18 @@ public partial class UsuariosController
     }
 
     [HttpPost("reportes/{id:int}/rechazar")]
-    [Authorize]
     public async Task<IActionResult> RechazarReporte(int id, CancellationToken ct)
     {
-        var uidStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
-        if (!int.TryParse(uidStr, out var uid)) return Unauthorized();
+        var uid = GetUserId(User);
+        if (uid is null) return Unauthorized();
 
         var reporte = await _db.Reportes.FirstOrDefaultAsync(r => r.Id == id, ct);
         if (reporte == null) return NotFound();
-        if (reporte.Estado == "ACEPTADO")
-            return BadRequest(new { mensaje = "El reporte ya fue aceptado." });
+        if (reporte.Estado == "ACEPTADO") return BadRequest(new { mensaje = "El reporte ya fue aceptado." });
 
         var candidata = await ObtenerSiguienteCandidataAsync(reporte, ct);
-        if (candidata == null)
-            return BadRequest(new { mensaje = "No hay estación candidata para rechazar." });
-        if (candidata.IdUsuario != uid)
-            return Forbid("La estación candidata no pertenece al usuario.");
+        if (candidata == null) return BadRequest(new { mensaje = "No hay estación candidata para rechazar." });
+        if (candidata.IdUsuario != uid.Value) return Forbid("La estación candidata no pertenece al usuario.");
 
         var rechazadas = _rechazosPorReporte.GetOrAdd(reporte.Id, _ => new HashSet<int>());
         lock (rechazadas) { rechazadas.Add(candidata.Id); }
@@ -129,11 +146,7 @@ public partial class UsuariosController
         var siguiente = await ObtenerSiguienteCandidataAsync(reporte, ct);
 
         await _hub.Clients.All.SendCoreAsync("ReporteRechazado", new object[] {
-            new {
-                ReporteId = reporte.Id,
-                EstacionRechazo = candidata.Id,
-                NuevaCandidata = siguiente?.Id
-            }
+            new { ReporteId = reporte.Id, EstacionRechazo = candidata.Id, NuevaCandidata = siguiente?.Id }
         }, ct);
 
         if (siguiente != null)

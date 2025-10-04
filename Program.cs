@@ -70,9 +70,10 @@ builder.Services
         };
     });
 
-builder.Services.AddAuthorization(o =>
+builder.Services.AddAuthorization(options =>
 {
-    o.AddPolicy("AdminOnly", p => p.RequireClaim("role_id", "1"));
+    options.AddPolicy("AdminOnly", p => p.RequireClaim("role_id", "1")); 
+    options.AddPolicy("BomberoOnly", p => p.RequireClaim("role_id", "2"));
 });
 
 builder.Services.AddSignalR();

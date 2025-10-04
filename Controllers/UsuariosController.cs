@@ -405,4 +405,41 @@ public partial class UsuariosController : ControllerBase
             r.Estado
         });
     }
+
+    [HttpGet("reportes")]
+    public async Task<IActionResult> ListarReportes(
+        [FromQuery] string? estado,
+        [FromQuery] int? usuarioId,
+        CancellationToken ct = default)
+    {
+
+
+        var q = _db.Reportes.AsNoTracking();
+
+        if (!string.IsNullOrWhiteSpace(estado))
+        {
+            var estadoNorm = estado.Trim().ToUpperInvariant();
+            q = q.Where(r => r.Estado.ToUpper() == estadoNorm);
+        }
+
+        if (usuarioId.HasValue)
+            q = q.Where(r => r.IdUsuario == usuarioId.Value);
+
+        var items = await q
+            .OrderByDescending(r => r.FechaCreacion)
+            .Select(r => new
+            {
+                r.Id,
+                r.IdUsuario,
+                r.Descripcion,
+                r.FotoUrl,
+                r.Latitud,
+                r.Longitud,
+                r.Estado,
+                r.FechaCreacion
+            })
+            .ToListAsync(ct);
+
+        return Ok(items);
+    }
 }
