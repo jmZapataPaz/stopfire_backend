@@ -6,14 +6,13 @@ using NetTopologySuite.Geometries;
 using StopFire.Api.Data;
 using StopFire.Api.Hubs;
 using StopFire.Api.Models;
-using System.Collections.Concurrent;
 using System.Security.Claims;
+using System.Collections.Concurrent;
 
 namespace StopFire.Api.Controllers;
 
 [ApiController]
-[Route("api/bombero")]
-[Authorize(Policy = "BomberoOnly")]
+[Route("api/[controller]")]
 public class BomberoController : ControllerBase
 {
     private readonly StopFireDbContext _db;
@@ -21,14 +20,11 @@ public class BomberoController : ControllerBase
     private readonly GeometryFactory _geometryFactory;
     private static readonly ConcurrentDictionary<int, HashSet<int>> _rechazosPorReporte = new();
 
-    public BomberoController(
-        StopFireDbContext db,
-        IHubContext<NotificacionesHub> hub,
-        GeometryFactory geometryFactory)
+    public BomberoController(StopFireDbContext db, IHubContext<NotificacionesHub> hub)
     {
         _db = db;
         _hub = hub;
-        _geometryFactory = geometryFactory;
+        _geometryFactory = NetTopologySuite.NtsGeometryServices.Instance.CreateGeometryFactory(srid: 4326);
     }
 
     private static int? GetUserId(ClaimsPrincipal user)
@@ -82,15 +78,12 @@ public class BomberoController : ControllerBase
     {
         var uid = GetUserId(User);
         if (uid is null) return Unauthorized();
-
         var reporte = await _db.Reportes.FirstOrDefaultAsync(r => r.Id == id, ct);
         if (reporte == null) return NotFound();
         if (reporte.Estado == "ACEPTADO") return Ok(new { mensaje = "Ya aceptado." });
-
         var siguiente = await ObtenerSiguienteCandidataAsync(reporte, ct);
-        if (siguiente == null) return BadRequest(new { mensaje = "No hay estación candidata." });
-        if (siguiente.IdUsuario != uid.Value) return Forbid("La estación candidata no pertenece al usuario.");
-
+        if (siguiente == null) return BadRequest(new { mensaje = "No hay estaciï¿½n candidata." });
+        if (siguiente.IdUsuario != uid.Value) return Forbid("La estaciï¿½n candidata no pertenece al usuario.");
         var asign = new Asignacion
         {
             IdEstacion = siguiente.Id,
@@ -99,23 +92,27 @@ public class BomberoController : ControllerBase
             CronometroMinutos = 0
         };
         _db.Asignaciones.Add(asign);
-
         reporte.Estado = "ACEPTADO";
         await _db.SaveChangesAsync(ct);
 
+        var asignPayload = new {
+            asign.Id,
+            asign.IdReporte,
+            asign.IdEstacion,
+            asign.CronometroMinutos,
+            asign.RespuestaUtc
+        };
+        await _hub.Clients.Group($"estacion_{siguiente.Id}")
+            .SendCoreAsync("AsignacionCreada", new object[] { asignPayload }, ct);
+        await _hub.Clients.All
+            .SendCoreAsync("AsignacionCreada", new object[] { asignPayload }, ct);
         await _hub.Clients.Group($"estacion_{siguiente.Id}")
             .SendCoreAsync("ReporteAsignado", new object[] {
                 new {
                     ReporteId = reporte.Id,
                     EstacionId = siguiente.Id,
                     Estado = reporte.Estado,
-                    asignacion = new {
-                        asign.Id,
-                        asign.IdEstacion,
-                        asign.IdReporte,
-                        asign.CronometroMinutos,
-                        asign.RespuestaUtc
-                    }
+                    asignacion = asignPayload
                 }
             }, ct);
 
@@ -137,8 +134,8 @@ public class BomberoController : ControllerBase
         if (reporte.Estado == "ACEPTADO") return BadRequest(new { mensaje = "El reporte ya fue aceptado." });
 
         var candidata = await ObtenerSiguienteCandidataAsync(reporte, ct);
-        if (candidata == null) return BadRequest(new { mensaje = "No hay estación candidata para rechazar." });
-        if (candidata.IdUsuario != uid.Value) return Forbid("La estación candidata no pertenece al usuario.");
+        if (candidata == null) return BadRequest(new { mensaje = "No hay estaciï¿½n candidata para rechazar." });
+        if (candidata.IdUsuario != uid.Value) return Forbid("La estaciï¿½n candidata no pertenece al usuario.");
 
         var rechazadas = _rechazosPorReporte.GetOrAdd(reporte.Id, _ => new HashSet<int>());
         lock (rechazadas) { rechazadas.Add(candidata.Id); }
@@ -165,5 +162,25 @@ public class BomberoController : ControllerBase
         }
 
         return Ok(new { mensaje = "Rechazado", IdReporte = reporte.Id, IdEstacion = candidata.Id, siguiente = siguiente?.Id });
+    }
+
+    [HttpPost("reportes/{id:int}/mitigar")]
+    [Authorize(Policy = "BomberoOnly")]
+    public async Task<IActionResult> MitigarReporte(int id, CancellationToken ct)
+    {
+        var reporte = await _db.Reportes.FirstOrDefaultAsync(r => r.Id == id, ct);
+        if (reporte == null) return NotFound(new { mensaje = "Reporte no encontrado." });
+        if (string.Equals(reporte.Estado, "MITIGADO", StringComparison.OrdinalIgnoreCase))
+            return Ok(new { mensaje = "Ya estaba mitigado.", Id = reporte.Id, Estado = reporte.Estado });
+
+        if (!string.Equals(reporte.Estado, "ACEPTADO", StringComparison.OrdinalIgnoreCase))
+            return Conflict(new { mensaje = "Solo se puede mitigar un reporte ACEPTADO.", EstadoActual = reporte.Estado });
+
+        reporte.Estado = "MITIGADO";
+        await _db.SaveChangesAsync(ct);
+        await _hub.Clients.All.SendAsync("ReporteEstado", new { Id = reporte.Id, Estado = reporte.Estado }, ct);
+        await _hub.Clients.All.SendAsync("ReporteMitigado", new { Id = reporte.Id }, ct);
+
+        return Ok(new { Id = reporte.Id, Estado = reporte.Estado });
     }
 }

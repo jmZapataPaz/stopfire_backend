@@ -313,7 +313,7 @@ public partial class UsuariosController : ControllerBase
             var baseUrl = $"{Request.Scheme}://{Request.Host}{Request.PathBase}";
             fotoUrl = $"{baseUrl}/reportes/{fileName}";
         }
-
+        //falta geometria
         var latitudValida = double.TryParse(dto.Latitud.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var latitud);
         var longitudValida = double.TryParse(dto.Longitud.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var longitud);
         if (!latitudValida || !longitudValida)
@@ -344,7 +344,7 @@ public partial class UsuariosController : ControllerBase
                 .OrderBy(e => e.Cobertura!.Centroid.Distance(point))
                 .First().Id;
         }
-        else
+        else//latitud y longitud
         {
             var fallback = await _db.Estaciones
                 .AsNoTracking()

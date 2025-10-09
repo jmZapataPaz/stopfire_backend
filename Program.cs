@@ -35,8 +35,12 @@ builder.Services.AddMemoryCache();
 builder.Services.AddSingleton<IEmailSender, SmtpEmailSender>();
 
 var cs = builder.Configuration.GetConnectionString("StopFireDb");
-builder.Services.AddDbContext<StopFireDbContext>(opt =>
-    opt.UseNpgsql(cs, o => o.UseNetTopologySuite()));
+builder.Services.AddSingleton<AsignacionChangesInterceptor>();
+builder.Services.AddDbContext<StopFireDbContext>((sp, opt) =>
+{
+    opt.UseNpgsql(cs, o => o.UseNetTopologySuite());
+    opt.AddInterceptors(sp.GetRequiredService<AsignacionChangesInterceptor>());
+});
 
 builder.Services
     .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
