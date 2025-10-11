@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using NetTopologySuite.Geometries;
 using StopFire.Api.Data;
+using StopFire.Api.Dtos.bombero;
 using StopFire.Api.Hubs;
 using StopFire.Api.Models;
 using System.Security.Claims;
@@ -183,4 +184,42 @@ public class BomberoController : ControllerBase
 
         return Ok(new { Id = reporte.Id, Estado = reporte.Estado });
     }
+
+    [HttpGet("estaciones/{idEstacion:int}/historial-aceptados")]
+    [Authorize(Policy = "BomberoOnly")]
+    public async Task<IActionResult> GetHistorialAceptadosPorEstacion(int idEstacion, CancellationToken ct)
+    {
+        var uid = GetUserId(User);
+        if (uid is null) return Unauthorized();
+        var estacion = await _db.Estaciones.AsNoTracking()
+            .FirstOrDefaultAsync(e => e.Id == idEstacion, ct);
+        if (estacion == null) return NotFound(new { mensaje = "Estación no encontrada." });
+        if (estacion.IdUsuario != uid.Value)
+            return Forbid("La estación no pertenece al usuario autenticado.");
+        var datos = await (
+            from a in _db.Asignaciones.AsNoTracking()
+            join r in _db.Reportes.AsNoTracking() on a.IdReporte equals r.Id
+            join u in _db.Usuarios.AsNoTracking() on r.IdUsuario equals u.Id
+            where a.IdEstacion == idEstacion && r.Estado == "MITIGADO" 
+            orderby r.FechaCreacion descending, a.Id descending
+            select new BomberoReporteAceptadoHistorialDto
+            {
+                IdReporte = r.Id,
+                IdAsignacion = a.Id,
+                IdEstacion = a.IdEstacion,
+                Descripcion = r.Descripcion,
+                NombreCompleto = ((u.Nombre ?? "") + " " + (u.Apellido ?? "")).Trim(),
+                Ci = u.Ci,
+                Celular = u.Celular,
+                Latitud = r.Latitud,
+                Longitud = r.Longitud,
+                FotoUrl = r.FotoUrl,
+                FechaCreacion = r.FechaCreacion
+            }
+        ).ToListAsync(ct);
+
+        return Ok(datos);
+    }
+
+    
 }

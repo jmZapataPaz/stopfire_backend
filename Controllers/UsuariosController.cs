@@ -73,8 +73,14 @@ public partial class UsuariosController : ControllerBase
             .FirstOrDefaultAsync(u => u.Correo.ToLower() == correo, ct);
 
         if (usuario is null || !BCrypt.Net.BCrypt.Verify(dto.Contrasena, usuario.Contrasena))
-            return Unauthorized(new { mensaje = "Credenciales inv�lidas." });
-        var token = GenerarJwt(usuario);
+            return Unauthorized(new { mensaje = "Credenciales inválidas." });
+        var estacionId = await _db.Estaciones
+            .AsNoTracking()
+            .Where(e => e.IdUsuario == usuario.Id)
+            .Select(e => (int?)e.Id)
+            .FirstOrDefaultAsync(ct);
+
+        var token = GenerarJwt(usuario, estacionId); 
         return Ok(new
         {
             token,
@@ -127,8 +133,7 @@ public partial class UsuariosController : ControllerBase
 
         return Ok(usuarios);
     }
-
-    private string GenerarJwt(Usuario usuario)
+    private string GenerarJwt(Usuario usuario, int? estacionId = null)
     {
         var jwt = _config.GetSection("Jwt");
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwt["Key"]!));
@@ -142,6 +147,9 @@ public partial class UsuariosController : ControllerBase
             new(ClaimTypes.Name, $"{usuario.Nombre} {usuario.Apellido}"),
             new("role_id", usuario.RolId.ToString())
         };
+
+        if (estacionId.HasValue)
+            claims.Add(new Claim("estacion_id", estacionId.Value.ToString()));
 
         var token = new JwtSecurityToken(
             issuer: jwt["Issuer"],

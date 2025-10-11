@@ -24,10 +24,10 @@ builder.Services.AddSwaggerGen();
 builder.Services.AddCors(o =>
 {
     o.AddPolicy("CorsPolicy", p => p
-        .SetIsOriginAllowed(_ => true)          // acepta cualquier origen (dev)
+        .SetIsOriginAllowed(_ => true)          
         .AllowAnyHeader()
         .AllowAnyMethod()
-        .AllowCredentials()                     // necesario con Authorization
+        .AllowCredentials()                     
     );
 });
 
@@ -58,7 +58,6 @@ builder.Services
             ValidAudience = jwt["Audience"],
             IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwt["Key"]!))
         };
-        // NECESARIO PARA SIGNALR (token via query access_token)
         options.Events = new JwtBearerEvents
         {
             OnMessageReceived = ctx =>
@@ -91,7 +90,6 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-//app.UseHttpsRedirection(); // Comentado para evitar redirección a https sin endpoint
 app.UseStaticFiles();
 app.UseCors("CorsPolicy");
 app.UseAuthentication();
@@ -100,7 +98,6 @@ app.MapControllers();
 
 app.MapHub<NotificacionesHub>("/hubs/notificaciones");
 
-// DEBUG: forzar evento
 app.MapPost("/debug/send-reporte", async (IHubContext<NotificacionesHub> hub) =>
 {
     var dto = new {
