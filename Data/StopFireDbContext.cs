@@ -29,6 +29,12 @@ public class StopFireDbContext : DbContext
             v => ParseNullableDouble(v)
         );
 
+        // Asegurar UTC y tipo correcto para Reporte.FechaCreacion
+        var utcConverter = new ValueConverter<DateTime, DateTime>(
+            toDb => toDb.Kind == DateTimeKind.Utc ? toDb : toDb.ToUniversalTime(),
+            fromDb => DateTime.SpecifyKind(fromDb, DateTimeKind.Utc)
+        );
+
         modelBuilder.Entity<Rol>(b =>
         {
             b.ToTable("rol");
@@ -111,6 +117,13 @@ public class StopFireDbContext : DbContext
             b.Property(x => x.CronometroMinutos).HasColumnName("cronometro").HasDefaultValue(2);
             b.HasOne(x => x.Reporte).WithMany().HasForeignKey(x => x.IdReporte);
             b.HasOne(x => x.Estacion).WithMany().HasForeignKey(x => x.IdEstacion);
+        });
+
+        modelBuilder.Entity<Reporte>(e =>
+        {
+            e.Property(r => r.FechaCreacion)
+             .HasConversion(utcConverter)
+             .HasColumnType("timestamp with time zone"); 
         });
     }
 }

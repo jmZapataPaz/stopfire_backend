@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using NetTopologySuite.Geometries;
+using NetTopologySuite.IO;
 using StopFire.Api.Data;
 using StopFire.Api.Dtos.bombero;
 using StopFire.Api.Hubs;
@@ -221,5 +222,92 @@ public class BomberoController : ControllerBase
         return Ok(datos);
     }
 
-    
+    [HttpPatch("estaciones/{id:int}")]
+    [Authorize(Policy = "BomberoOnly")]
+    public async Task<IActionResult> ActualizarEstacion(int id, [FromBody] BomberoActualizarEstacionDto dto, CancellationToken ct)
+    {
+        var uid = GetUserId(User);
+        if (uid is null) return Unauthorized();
+
+        var estacion = await _db.Estaciones.FirstOrDefaultAsync(e => e.Id == id, ct);
+        if (estacion == null) return NotFound(new { mensaje = "Estación no encontrada." });
+
+        if (estacion.IdUsuario != uid.Value)
+            return Forbid("La estación no pertenece al usuario autenticado.");
+        if (dto.Nombre is not null) estacion.Nombre = dto.Nombre.Trim();
+        if (dto.DescripcionDireccion is not null) estacion.DescripcionDireccion = dto.DescripcionDireccion.Trim();
+        if (dto.Celular is not null) estacion.Celular = dto.Celular.Trim();
+        await _db.SaveChangesAsync(ct);
+        await _hub.Clients.Group($"estacion_{estacion.Id}")
+            .SendCoreAsync("EstacionActualizada", new object[] {
+                new {
+                    Id = estacion.Id,
+                    Nombre = estacion.Nombre,
+                    DescripcionDireccion = estacion.DescripcionDireccion,
+                    Celular = estacion.Celular
+                }
+            }, ct);
+
+        return Ok(new
+        {
+            estacion.Id,
+            estacion.Nombre,
+            estacion.DescripcionDireccion,
+            estacion.Celular
+        });
+    }
+
+    [HttpGet("estaciones/{id:int}")]
+    [Authorize(Policy = "BomberoOnly")]
+    public async Task<IActionResult> GetEstacionPorId(int id, CancellationToken ct)
+    {
+        var uid = GetUserId(User);
+        if (uid is null) return Unauthorized();
+
+        var estacion = await _db.Estaciones.AsNoTracking()
+            .FirstOrDefaultAsync(e => e.Id == id, ct);
+        if (estacion == null) return NotFound(new { mensaje = "Estación no encontrada." });
+        if (estacion.IdUsuario != uid.Value)
+            return Forbid("La estación no pertenece al usuario autenticado.");
+
+        var dto = new BomberoEstacionDetalleDto
+        {
+            Id = estacion.Id,
+            IdUsuario = estacion.IdUsuario,
+            Nombre = estacion.Nombre,
+            DescripcionDireccion = estacion.DescripcionDireccion,
+            Celular = estacion.Celular,
+            Latitud = double.TryParse(estacion.Latitud, out var lat) ? lat : (double?)null,
+            Longitud = double.TryParse(estacion.Longitud, out var lon) ? lon : (double?)null,
+            Estado = estacion.Estado,
+            CoberturaWkt = estacion.Cobertura != null ? new WKTWriter().Write(estacion.Cobertura) : null
+        };
+        return Ok(dto);
+    }
+
+    [HttpGet("mi-estacion")]
+    [Authorize(Policy = "BomberoOnly")]
+    public async Task<IActionResult> GetMiEstacion(CancellationToken ct)
+    {
+        var uid = GetUserId(User);
+        if (uid is null) return Unauthorized();
+
+        var estacion = await _db.Estaciones.AsNoTracking()
+            .FirstOrDefaultAsync(e => e.IdUsuario == uid.Value, ct);
+        if (estacion == null) return NotFound(new { mensaje = "No tiene estación asignada." });
+
+        var dto = new BomberoEstacionDetalleDto
+        {
+            Id = estacion.Id,
+            IdUsuario = estacion.IdUsuario,
+            Nombre = estacion.Nombre,
+            DescripcionDireccion = estacion.DescripcionDireccion,
+            Celular = estacion.Celular,
+            Latitud = double.TryParse(estacion.Latitud, out var lat) ? lat : (double?)null,
+            Longitud = double.TryParse(estacion.Longitud, out var lon) ? lon : (double?)null,
+            Estado = estacion.Estado,
+            CoberturaWkt = estacion.Cobertura != null ? new WKTWriter().Write(estacion.Cobertura) : null
+        };
+        return Ok(dto);
+    }
 }

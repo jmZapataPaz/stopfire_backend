@@ -334,11 +334,20 @@ public partial class UsuariosController : ControllerBase
             FotoUrl = fotoUrl,
             Latitud = latitud,
             Longitud = longitud,
-            Estado = "PENDIENTE"
+            Estado = "PENDIENTE",
+            FechaCreacion = DateTime.UtcNow 
         };
 
         _db.Reportes.Add(reporte);
         await _db.SaveChangesAsync(ct);
+
+        // NUEVO: cargar datos del usuario para incluir en el payload (no rompe a quien no los usa)
+        var u = await _db.Usuarios
+            .AsNoTracking()
+            .Where(x => x.Id == userId.Value)
+            .Select(x => new { x.Nombre, x.Apellido, x.Ci, x.Correo, x.Celular })
+            .FirstAsync(ct);
+
         var point = _geometryFactory.CreatePoint(new Coordinate(longitud, latitud));
         var contenedoras = await _db.Estaciones
             .AsNoTracking()
@@ -363,29 +372,52 @@ public partial class UsuariosController : ControllerBase
         }
         await _hub.Clients.All.SendAsync("ReporteCreado", new
         {
+            // existentes (se serializan a camelCase automáticamente)
             Id = reporte.Id,
             Descripcion = reporte.Descripcion,
             Latitud = reporte.Latitud,
             Longitud = reporte.Longitud,
             ImagenUrl = reporte.FotoUrl,
             Estado = reporte.Estado,
-            PrimeraCandidata = primeraCandidataId
+            PrimeraCandidata = primeraCandidataId,
+
+            // QUITAR DUPLICADOS que colisionan:
+            // descripcion = reporte.Descripcion,
+            // imagenUrl = reporte.FotoUrl,
+
+            // Datos de la persona (se mantienen)
+            usuarioNombre = $"{u.Nombre} {u.Apellido}".Trim(),
+            usuarioCi = u.Ci,
+            usuarioCelular = u.Celular,
+            usuarioEmail = u.Correo,
         }, ct);
+
         if (primeraCandidataId.HasValue)
         {
             await _hub.Clients.Group($"estacion_{primeraCandidataId.Value}")
                 .SendAsync("ReportePendiente", new
                 {
+                    // existentes
                     ReporteId = reporte.Id,
                     Candidata = primeraCandidataId.Value,
                     reporte.Descripcion,
                     reporte.Latitud,
-                    reporte.Longitud
+                    reporte.Longitud,
+
+                    // QUITAR DUPLICADO que colisiona:
+                    // descripcion = reporte.Descripcion,
+
+                    // persona
+                    usuarioNombre = $"{u.Nombre} {u.Apellido}".Trim(),
+                    usuarioCi = u.Ci,
+                    usuarioCelular = u.Celular,
+                    usuarioEmail = u.Correo,
                 }, ct);
         }
 
         return CreatedAtAction(nameof(ObtenerReportePorId), new { id = reporte.Id }, new
         {
+            // existentes
             reporte.Id,
             reporte.IdUsuario,
             reporte.Descripcion,
@@ -393,7 +425,17 @@ public partial class UsuariosController : ControllerBase
             reporte.Latitud,
             reporte.Longitud,
             reporte.Estado,
-            primeraCandidata = primeraCandidataId
+            primeraCandidata = primeraCandidataId,
+
+            // QUITAR DUPLICADOS que colisionan:
+            // descripcion = reporte.Descripcion,
+            // imagenUrl = reporte.FotoUrl,
+
+            // persona
+            usuarioNombre = $"{u.Nombre} {u.Apellido}".Trim(),
+            usuarioCi = u.Ci,
+            usuarioCelular = u.Celular,
+            usuarioEmail = u.Correo,
         });
     }
 
