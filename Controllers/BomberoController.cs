@@ -136,17 +136,38 @@ public class BomberoController : ControllerBase
         if (reporte.Estado == "ACEPTADO") return BadRequest(new { mensaje = "El reporte ya fue aceptado." });
 
         var candidata = await ObtenerSiguienteCandidataAsync(reporte, ct);
-        if (candidata == null) return BadRequest(new { mensaje = "No hay estaci�n candidata para rechazar." });
-        if (candidata.IdUsuario != uid.Value) return Forbid("La estaci�n candidata no pertenece al usuario.");
+        if (candidata == null) return BadRequest(new { mensaje = "No hay estación candidata para rechazar." });
+        if (candidata.IdUsuario != uid.Value) return Forbid("La estación candidata no pertenece al usuario.");
 
         var rechazadas = _rechazosPorReporte.GetOrAdd(reporte.Id, _ => new HashSet<int>());
         lock (rechazadas) { rechazadas.Add(candidata.Id); }
 
         var siguiente = await ObtenerSiguienteCandidataAsync(reporte, ct);
 
-        await _hub.Clients.All.SendCoreAsync("ReporteRechazado", new object[] {
-            new { ReporteId = reporte.Id, EstacionRechazo = candidata.Id, NuevaCandidata = siguiente?.Id }
-        }, ct);
+        // Cargar datos del usuario para incluirlos en el payload (mismo shape que ReporteCreado)
+        var u = await _db.Usuarios
+            .AsNoTracking()
+            .Where(x => x.Id == reporte.IdUsuario)
+            .Select(x => new { x.Nombre, x.Apellido, x.Ci, x.Correo, x.Celular })
+            .FirstAsync(ct);
+
+        var rechazadoPayload = new
+        {
+            Id = reporte.Id,
+            IdUsuario = reporte.IdUsuario,
+            Descripcion = reporte.Descripcion,
+            FotoUrl = reporte.FotoUrl,
+            Latitud = reporte.Latitud,
+            Longitud = reporte.Longitud,
+            Estado = reporte.Estado,
+            PrimeraCandidata = siguiente?.Id,
+            usuarioNombre = $"{u.Nombre} {u.Apellido}".Trim(),
+            usuarioCi = u.Ci,
+            usuarioCelular = u.Celular,
+            usuarioEmail = u.Correo
+        };
+
+        await _hub.Clients.All.SendCoreAsync("ReporteRechazado", new object[] { rechazadoPayload }, ct);
 
         if (siguiente != null)
         {
@@ -224,7 +245,8 @@ public class BomberoController : ControllerBase
 
     [HttpPatch("estaciones/{id:int}")]
     [Authorize(Policy = "BomberoOnly")]
-    public async Task<IActionResult> ActualizarEstacion(int id, [FromBody] BomberoActualizarEstacionDto dto, CancellationToken ct)
+    public async Task<IActionResult> ActualizarEstacion(int id, [FromBody] 
+    BomberoActualizarEstacionDto dto, CancellationToken ct)
     {
         var uid = GetUserId(User);
         if (uid is null) return Unauthorized();
@@ -235,7 +257,8 @@ public class BomberoController : ControllerBase
         if (estacion.IdUsuario != uid.Value)
             return Forbid("La estación no pertenece al usuario autenticado.");
         if (dto.Nombre is not null) estacion.Nombre = dto.Nombre.Trim();
-        if (dto.DescripcionDireccion is not null) estacion.DescripcionDireccion = dto.DescripcionDireccion.Trim();
+        if (dto.DescripcionDireccion is not null) estacion.DescripcionDireccion 
+        = dto.DescripcionDireccion.Trim();
         if (dto.Celular is not null) estacion.Celular = dto.Celular.Trim();
         await _db.SaveChangesAsync(ct);
         await _hub.Clients.Group($"estacion_{estacion.Id}")

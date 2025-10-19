@@ -259,7 +259,7 @@ public partial class UsuariosController : ControllerBase
             return BadRequest(new { mensaje = "Solicitud no encontrada o OTP expirado." });
 
         if (!string.Equals(dto.Codigo?.Trim(), data.Otp, StringComparison.Ordinal))
-            return BadRequest(new { mensaje = "OTP inv�lido." });
+            return BadRequest(new { mensaje = "OTP inválido." });
 
         var existe = await _db.Usuarios.AsNoTracking()
             .AnyAsync(u => u.Correo.ToLower() == correo || u.Ci == data.Ci, ct);
