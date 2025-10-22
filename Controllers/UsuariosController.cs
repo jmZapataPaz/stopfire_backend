@@ -444,6 +444,15 @@ public partial class UsuariosController : ControllerBase
     {
         var r = await _db.Reportes.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id, ct);
         if (r is null) return NotFound();
+
+        // AGREGADO: estación asignada (si existe una Asignación)
+        var estAsignadaId = await _db.Asignaciones
+            .AsNoTracking()
+            .Where(a => a.IdReporte == id)
+            .OrderByDescending(a => a.Id)
+            .Select(a => (int?)a.IdEstacion)
+            .FirstOrDefaultAsync(ct);
+
         return Ok(new
         {
             r.Id,
@@ -452,7 +461,8 @@ public partial class UsuariosController : ControllerBase
             r.FotoUrl,
             r.Latitud,
             r.Longitud,
-            r.Estado
+            r.Estado,
+            EstacionId = estAsignadaId // AGREGADO
         });
     }
 
@@ -486,7 +496,14 @@ public partial class UsuariosController : ControllerBase
                 r.Latitud,
                 r.Longitud,
                 r.Estado,
-                r.FechaCreacion
+                r.FechaCreacion,
+                // AGREGADO: estación asignada (última asignación si existe)
+                EstacionId = _db.Asignaciones
+                    .AsNoTracking()
+                    .Where(a => a.IdReporte == r.Id)
+                    .OrderByDescending(a => a.Id)
+                    .Select(a => (int?)a.IdEstacion)
+                    .FirstOrDefault()
             })
             .ToListAsync(ct);
 
