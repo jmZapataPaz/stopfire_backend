@@ -440,28 +440,48 @@ public partial class UsuariosController : ControllerBase
     [HttpGet("reportes/{id:int}")]
     public async Task<IActionResult> ObtenerReportePorId(int id, CancellationToken ct)
     {
-        var r = await _db.Reportes.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id, ct);
-        if (r is null) return NotFound();
-
-        // AGREGADO: estación asignada (si existe una Asignación)
-        var estAsignadaId = await _db.Asignaciones
+        var dto = await _db.Reportes
             .AsNoTracking()
-            .Where(a => a.IdReporte == id)
-            .OrderByDescending(a => a.Id)
-            .Select(a => (int?)a.IdEstacion)
+            .Where(r => r.Id == id)
+            .Select(r => new
+            {
+                r.Id,
+                r.IdUsuario,
+                r.Descripcion,
+                r.FotoUrl,
+                r.Latitud,
+                r.Longitud,
+                r.Estado,
+                r.FechaCreacion,
+                Confirmaciones = r.Confirmaciones ?? 0,
+                // mismos campos adicionales que en el GET global:
+                RiesgoPercent = Math.Min(100, (r.Confirmaciones ?? 0) * 20),
+                UsuarioNombre = _db.Usuarios
+                    .AsNoTracking()
+                    .Where(u => u.Id == r.IdUsuario)
+                    .Select(u => (u.Nombre + " " + u.Apellido).Trim())
+                    .FirstOrDefault(),
+                UsuarioCi = _db.Usuarios
+                    .AsNoTracking()
+                    .Where(u => u.Id == r.IdUsuario)
+                    .Select(u => u.Ci)
+                    .FirstOrDefault(),
+                UsuarioCelular = _db.Usuarios
+                    .AsNoTracking()
+                    .Where(u => u.Id == r.IdUsuario)
+                    .Select(u => u.Celular)
+                    .FirstOrDefault(),
+                EstacionId = _db.Asignaciones
+                    .AsNoTracking()
+                    .Where(a => a.IdReporte == r.Id)
+                    .OrderByDescending(a => a.Id)
+                    .Select(a => (int?)a.IdEstacion)
+                    .FirstOrDefault()
+            })
             .FirstOrDefaultAsync(ct);
 
-        return Ok(new
-        {
-            r.Id,
-            r.IdUsuario,
-            r.Descripcion,
-            r.FotoUrl,
-            r.Latitud,
-            r.Longitud,
-            r.Estado,
-            EstacionId = estAsignadaId // AGREGADO
-        });
+        if (dto is null) return NotFound();
+        return Ok(dto);
     }
 
     [HttpPost("reportes/{id:int}/confirm")]
@@ -535,6 +555,26 @@ public partial class UsuariosController : ControllerBase
                 r.Estado,
                 r.FechaCreacion,
                 Confirmaciones = r.Confirmaciones ?? 0,
+                // AGREGADO: RiesgoPercent calculado en servidor (mantener dentro del resultado)
+                RiesgoPercent = Math.Min(100, (r.Confirmaciones ?? 0) * 20),
+
+                // AGREGADO: datos del ciudadano reportante al mismo nivel (no anidados)
+                UsuarioNombre = _db.Usuarios
+                    .AsNoTracking()
+                    .Where(u => u.Id == r.IdUsuario)
+                    .Select(u => (u.Nombre + " " + u.Apellido).Trim())
+                    .FirstOrDefault(),
+                UsuarioCi = _db.Usuarios
+                    .AsNoTracking()
+                    .Where(u => u.Id == r.IdUsuario)
+                    .Select(u => u.Ci)
+                    .FirstOrDefault(),
+                UsuarioCelular = _db.Usuarios
+                    .AsNoTracking()
+                    .Where(u => u.Id == r.IdUsuario)
+                    .Select(u => u.Celular)
+                    .FirstOrDefault(),
+
                 EstacionId = _db.Asignaciones
                     .AsNoTracking()
                     .Where(a => a.IdReporte == r.Id)
