@@ -338,6 +338,7 @@ public partial class UsuariosController : ControllerBase
             FechaCreacion = DateTime.UtcNow 
         };
 
+        reporte.Confirmaciones = 1;
         _db.Reportes.Add(reporte);
         await _db.SaveChangesAsync(ct);
 
@@ -370,9 +371,10 @@ public partial class UsuariosController : ControllerBase
                 .FirstOrDefaultAsync(ct);
             primeraCandidataId = fallback?.Id;
         }
+        int riesgoPercent = Math.Min(100, (reporte.Confirmaciones ?? 0) * 20); // tolera NULL
+
         await _hub.Clients.All.SendAsync("ReporteCreado", new
         {
-            // existentes (se serializan a camelCase automáticamente)
             Id = reporte.Id,
             Descripcion = reporte.Descripcion,
             Latitud = reporte.Latitud,
@@ -380,12 +382,8 @@ public partial class UsuariosController : ControllerBase
             ImagenUrl = reporte.FotoUrl,
             Estado = reporte.Estado,
             PrimeraCandidata = primeraCandidataId,
-
-            // QUITAR DUPLICADOS que colisionan:
-            // descripcion = reporte.Descripcion,
-            // imagenUrl = reporte.FotoUrl,
-
-            // Datos de la persona (se mantienen)
+            Confirmaciones = reporte.Confirmaciones ?? 0,
+            RiesgoPercent = riesgoPercent,
             usuarioNombre = $"{u.Nombre} {u.Apellido}".Trim(),
             usuarioCi = u.Ci,
             usuarioCelular = u.Celular,
@@ -466,14 +464,37 @@ public partial class UsuariosController : ControllerBase
         });
     }
 
+    [HttpPost("reportes/{id:int}/confirm")]
+    public async Task<IActionResult> ConfirmarReporte(int id, CancellationToken ct)
+    {
+        var r = await _db.Reportes.FindAsync(new object[] { id }, ct);
+        if (r is null) return NotFound();
+
+        var curr = r.Confirmaciones ?? 0;
+        r.Confirmaciones = curr <= 0 ? 1 : curr + 1;
+
+        await _db.SaveChangesAsync(ct);
+
+        var riesgo = Math.Min(100, (r.Confirmaciones ?? 0) * 20);
+        await _hub.Clients.All.SendAsync("ReporteConfirmado", new
+        {
+            id = r.Id,
+            confirmaciones = r.Confirmaciones ?? 0,
+            riesgoPercent = riesgo
+        }, ct);
+
+        return Ok(new { id = r.Id, confirmaciones = r.Confirmaciones ?? 0, riesgoPercent = riesgo });
+    }
+
     [HttpGet("reportes")]
     public async Task<IActionResult> ListarReportes(
         [FromQuery] string? estado,
         [FromQuery] int? usuarioId,
+        [FromQuery] double? lat,
+        [FromQuery] double? lon,
+        [FromQuery] double? radiusMeters,
         CancellationToken ct = default)
     {
-
-
         var q = _db.Reportes.AsNoTracking();
 
         if (!string.IsNullOrWhiteSpace(estado))
@@ -485,7 +506,23 @@ public partial class UsuariosController : ControllerBase
         if (usuarioId.HasValue)
             q = q.Where(r => r.IdUsuario == usuarioId.Value);
 
-        var items = await q
+        // 1) Filtro SQL por bounding box (evita traducción espacial no soportada)
+        if (lat.HasValue && lon.HasValue && radiusMeters.HasValue)
+        {
+            var degLat = radiusMeters.Value / 111320.0;
+            var degLon = radiusMeters.Value / (111320.0 * Math.Cos(Math.PI * lat.Value / 180.0));
+            var minLat = lat.Value - degLat;
+            var maxLat = lat.Value + degLat;
+            var minLon = lon.Value - degLon;
+            var maxLon = lon.Value + degLon;
+
+            q = q.Where(r =>
+                r.Latitud >= minLat && r.Latitud <= maxLat &&
+                r.Longitud >= minLon && r.Longitud <= maxLon);
+        }
+
+        // 2) Traer datos y proyectar
+        var prelim = await q
             .OrderByDescending(r => r.FechaCreacion)
             .Select(r => new
             {
@@ -497,7 +534,7 @@ public partial class UsuariosController : ControllerBase
                 r.Longitud,
                 r.Estado,
                 r.FechaCreacion,
-                // AGREGADO: estación asignada (última asignación si existe)
+                Confirmaciones = r.Confirmaciones ?? 0,
                 EstacionId = _db.Asignaciones
                     .AsNoTracking()
                     .Where(a => a.IdReporte == r.Id)
@@ -507,6 +544,18 @@ public partial class UsuariosController : ControllerBase
             })
             .ToListAsync(ct);
 
-        return Ok(items);
+        // 3) Filtro espacial preciso en memoria (evita error de traducción LINQ)
+        if (lat.HasValue && lon.HasValue && radiusMeters.HasValue)
+        {
+            var center = _geometryFactory.CreatePoint(new Coordinate(lon.Value, lat.Value));
+            var buffer = center.Buffer(radiusMeters.Value / 111320.0);
+
+            prelim = prelim
+                .Where(x => x.Latitud != null && x.Longitud != null &&
+                            buffer.Contains(_geometryFactory.CreatePoint(new Coordinate(x.Longitud!.Value, x.Latitud!.Value))))
+                .ToList();
+        }
+
+        return Ok(prelim);
     }
 }
