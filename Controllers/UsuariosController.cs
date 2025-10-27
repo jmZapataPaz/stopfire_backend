@@ -454,7 +454,6 @@ public partial class UsuariosController : ControllerBase
                 r.Estado,
                 r.FechaCreacion,
                 Confirmaciones = r.Confirmaciones ?? 0,
-                // mismos campos adicionales que en el GET global:
                 RiesgoPercent = Math.Min(100, (r.Confirmaciones ?? 0) * 20),
                 UsuarioNombre = _db.Usuarios
                     .AsNoTracking()
