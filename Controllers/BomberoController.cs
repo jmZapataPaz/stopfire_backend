@@ -338,7 +338,7 @@ public class BomberoController : ControllerBase
     // AGREGADO: métricas heatmap por estación (solo mitigados) -> clustering por radio (2km)
     [HttpGet("estaciones/{idEstacion:int}/metricas/heatmap")]
     [Authorize(Policy = "BomberoOnly")]
-    public async Task<IActionResult> GetHeatmapByEstacion(int idEstacion, CancellationToken ct)
+    public async Task<IActionResult> GetHeatmapByEstacion(int idEstacion, [FromQuery] int? month, [FromQuery] int? year, CancellationToken ct)
     {
         var uid = GetUserId(User);
         if (uid is null) return Unauthorized();
@@ -347,22 +347,42 @@ public class BomberoController : ControllerBase
         if (estacion == null) return NotFound(new { mensaje = "Estación no encontrada." });
         if (estacion.IdUsuario != uid.Value) return Forbid("La estación no pertenece al usuario autenticado.");
 
+        // Determinar mes/año aplicados (por defecto: fecha del sistema UTC)
+        var now = DateTime.UtcNow;
+        var applyMonth = month ?? now.Month;
+        var applyYear = year ?? now.Year;
+        // rango [inicio, fin) para filtrar FechaCreacion
+        DateTime start;
+        try
+        {
+            start = new DateTime(applyYear, applyMonth, 1, 0, 0, 0, DateTimeKind.Utc);
+        }
+        catch
+        {
+            // en caso de parámetros inválidos, usar mes/año actual
+            start = new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc);
+        }
+        var end = start.AddMonths(1);
+ 
         // Traer reportes mitigados asignados a esta estación (usando Asignaciones para la relación)
         var items = await (
             from a in _db.Asignaciones.AsNoTracking()
             join r in _db.Reportes.AsNoTracking() on a.IdReporte equals r.Id
-            where a.IdEstacion == idEstacion && r.Estado == "MITIGADO" && r.Latitud != null && r.Longitud != null
+            where a.IdEstacion == idEstacion
+                  && r.Estado == "MITIGADO"
+                  && r.Latitud != null && r.Longitud != null
+                  && r.FechaCreacion >= start && r.FechaCreacion < end
             select new { r.Id, Lat = r.Latitud, Lon = r.Longitud, r.FechaCreacion }
         ).ToListAsync(ct);
-
+ 
         if (items.Count == 0)
         {
-            return Ok(new { total = 0, points = Array.Empty<object>(), message = "No hay datos para hacer la métrica." });
+            return Ok(new { total = 0, points = Array.Empty<object>(), message = "No hay datos para hacer la métrica.", month = start.Month, year = start.Year });
         }
-
+ 
         // Clustering por radio (metros)
         const double radiusMeters = 2000.0;
-
+ 
         // helper: Haversine distance in meters
         static double DistanceMeters(double lat1, double lon1, double lat2, double lon2)
         {
@@ -376,16 +396,16 @@ public class BomberoController : ControllerBase
             var c = 2 * Math.Atan2(Math.Sqrt(a), Math.Sqrt(1-a));
             return R * c;
         }
-
+ 
         // clusters: centroid + members (to compute radius)
         var clusters = new List<(double Lat, double Lon, List<(int Id, double Lat, double Lon)> Members, DateTime FirstFecha)>();
-
+ 
         foreach (var it in items)
         {
             var lat = it.Lat!.Value;
             var lon = it.Lon!.Value;
             bool added = false;
-
+ 
             for (int i = 0; i < clusters.Count; i++)
             {
                 var c = clusters[i];
@@ -403,13 +423,13 @@ public class BomberoController : ControllerBase
                     break;
                 }
             }
-
+ 
             if (!added)
             {
                 clusters.Add((Lat: lat, Lon: lon, Members: new List<(int, double, double)> { (it.Id, lat, lon) }, FirstFecha: it.FechaCreacion));
             }
         }
-
+ 
         // proyectar resultado y calcular radiusMeters por cluster (máx distancia a centroid + buffer)
         var result = clusters
             .Select(c =>
@@ -418,7 +438,7 @@ public class BomberoController : ControllerBase
                 var maxDist = c.Members.Count == 0 ? 0.0 :
                     c.Members.Max(m => DistanceMeters(c.Lat, c.Lon, m.Lat, m.Lon));
                 var radius = Math.Max(150.0, maxDist + 100.0); // al menos 150m, buffer 100m
-
+ 
                 return new {
                     Lat = Math.Round(c.Lat, 6),
                     Lon = Math.Round(c.Lon, 6),
@@ -430,7 +450,7 @@ public class BomberoController : ControllerBase
             })
             .OrderByDescending(x => x.Count)
             .ToList();
-
-        return Ok(new { total = items.Count, points = result });
+ 
+        return Ok(new { total = items.Count, points = result, month = start.Month, year = start.Year });
     }
 }
