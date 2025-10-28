@@ -20,6 +20,7 @@ using StopFire.Api.Hubs;
 using Microsoft.AspNetCore.SignalR;
 using NetTopologySuite.Geometries;
 using System.Globalization;
+using System.ComponentModel.DataAnnotations;
 
 namespace StopFire.Api.Controllers;
 
@@ -596,5 +597,40 @@ public partial class UsuariosController : ControllerBase
         }
 
         return Ok(prelim);
+    }
+
+    [Authorize]
+    [HttpPut("{id:int}")]
+    public async Task<IActionResult> ActualizarUsuario(int id, [FromBody] ActualizarUsuarioDto dto, CancellationToken ct)
+    {
+        if (!ModelState.IsValid) return ValidationProblem(ModelState);
+
+        var userId = TryGetUserIdFromToken();
+        if (userId is null) return Unauthorized(new { mensaje = "Token inválido." });
+        if (userId.Value != id) return Forbid("No tienes permisos para actualizar este usuario.");
+
+        var usuario = await _db.Usuarios.FirstOrDefaultAsync(u => u.Id == id, ct);
+        if (usuario is null) return NotFound(new { mensaje = "Usuario no encontrado." });
+
+        var correoNorm = dto.Correo.Trim().ToLowerInvariant();
+        var existeCorreo = await _db.Usuarios
+            .AsNoTracking()
+            .AnyAsync(u => u.Id != id && u.Correo.ToLower() == correoNorm, ct);
+        if (existeCorreo)
+            return Conflict(new { mensaje = "El correo ya está en uso por otro usuario." });
+
+        usuario.Nombre = dto.Nombre.Trim();
+        usuario.Apellido = dto.Apellido.Trim();
+        usuario.Correo = dto.Correo.Trim();
+
+        await _db.SaveChangesAsync(ct);
+
+        return Ok(new
+        {
+            usuario.Id,
+            usuario.Nombre,
+            usuario.Apellido,
+            usuario.Correo
+        });
     }
 }
