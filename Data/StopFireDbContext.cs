@@ -35,6 +35,19 @@ public class StopFireDbContext : DbContext
             fromDb => DateTime.SpecifyKind(fromDb, DateTimeKind.Utc)
         );
 
+        // Converter nullable para columnas timestamp nullable en BD
+        var utcNullableConverter = new ValueConverter<DateTime?, DateTime?>(
+            toDb => toDb.HasValue ? (toDb.Value.Kind == DateTimeKind.Utc ? toDb.Value : toDb.Value.ToUniversalTime()) : (DateTime?)null,
+            fromDb => fromDb.HasValue ? DateTime.SpecifyKind(fromDb.Value, DateTimeKind.Utc) : (DateTime?)null
+        );
+
+        // Converter para columna 'respuesta' que actualmente es varchar en la BD
+        var dateStringConverter = new ValueConverter<DateTime?, string?>(
+            v => v.HasValue ? v.Value.ToString("o", CultureInfo.InvariantCulture) : null,
+            v => string.IsNullOrWhiteSpace(v) ? (DateTime?)null
+                 : DateTime.SpecifyKind(DateTime.Parse(v, null, DateTimeStyles.RoundtripKind), DateTimeKind.Utc)
+        );
+
         modelBuilder.Entity<Rol>(b =>
         {
             b.ToTable("rol");
@@ -119,7 +132,12 @@ public class StopFireDbContext : DbContext
             b.Property(x => x.Id).HasColumnName("id").ValueGeneratedOnAdd();
             b.Property(x => x.IdReporte).HasColumnName("id_reporte").IsRequired();
             b.Property(x => x.IdEstacion).HasColumnName("id_estacion").IsRequired();
-            b.Property(x => x.RespuestaUtc).HasColumnName("respuesta").IsRequired(false);
+            // Respuesta ahora es timestamp with time zone en la BD -> mapear como fecha nullable con conversión a UTC
+            b.Property(x => x.RespuestaUtc)
+                .HasColumnName("respuesta")
+                .HasConversion(utcNullableConverter)
+                .HasColumnType("timestamp with time zone")
+                .IsRequired(false);
             b.Property(x => x.CronometroMinutos).HasColumnName("cronometro").HasDefaultValue(2);
             b.HasOne(x => x.Reporte).WithMany().HasForeignKey(x => x.IdReporte);
             b.HasOne(x => x.Estacion).WithMany().HasForeignKey(x => x.IdEstacion);

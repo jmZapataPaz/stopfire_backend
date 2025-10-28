@@ -145,7 +145,6 @@ public class BomberoController : ControllerBase
 
         var siguiente = await ObtenerSiguienteCandidataAsync(reporte, ct);
 
-        // Cargar datos del usuario para incluirlos en el payload (mismo shape que ReporteCreado)
         var u = await _db.Usuarios
             .AsNoTracking()
             .Where(x => x.Id == reporte.IdUsuario)
@@ -335,7 +334,6 @@ public class BomberoController : ControllerBase
         return Ok(dto);
     }
 
-    // AGREGADO: métricas heatmap por estación (solo mitigados) -> clustering por radio (2km)
     [HttpGet("estaciones/{idEstacion:int}/metricas/heatmap")]
     [Authorize(Policy = "BomberoOnly")]
     public async Task<IActionResult> GetHeatmapByEstacion(int idEstacion, [FromQuery] int? month, [FromQuery] int? year, CancellationToken ct)
@@ -346,12 +344,9 @@ public class BomberoController : ControllerBase
         var estacion = await _db.Estaciones.AsNoTracking().FirstOrDefaultAsync(e => e.Id == idEstacion, ct);
         if (estacion == null) return NotFound(new { mensaje = "Estación no encontrada." });
         if (estacion.IdUsuario != uid.Value) return Forbid("La estación no pertenece al usuario autenticado.");
-
-        // Determinar mes/año aplicados (por defecto: fecha del sistema UTC)
         var now = DateTime.UtcNow;
         var applyMonth = month ?? now.Month;
         var applyYear = year ?? now.Year;
-        // rango [inicio, fin) para filtrar FechaCreacion
         DateTime start;
         try
         {
@@ -359,12 +354,10 @@ public class BomberoController : ControllerBase
         }
         catch
         {
-            // en caso de parámetros inválidos, usar mes/año actual
             start = new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc);
         }
         var end = start.AddMonths(1);
  
-        // Traer reportes mitigados asignados a esta estación (usando Asignaciones para la relación)
         var items = await (
             from a in _db.Asignaciones.AsNoTracking()
             join r in _db.Reportes.AsNoTracking() on a.IdReporte equals r.Id
@@ -379,11 +372,7 @@ public class BomberoController : ControllerBase
         {
             return Ok(new { total = 0, points = Array.Empty<object>(), message = "No hay datos para hacer la métrica.", month = start.Month, year = start.Year });
         }
- 
-        // Clustering por radio (metros)
         const double radiusMeters = 2000.0;
- 
-        // helper: Haversine distance in meters
         static double DistanceMeters(double lat1, double lon1, double lat2, double lon2)
         {
             const double R = 6371000; // Earth radius in meters
@@ -397,7 +386,6 @@ public class BomberoController : ControllerBase
             return R * c;
         }
  
-        // clusters: centroid + members (to compute radius)
         var clusters = new List<(double Lat, double Lon, List<(int Id, double Lat, double Lon)> Members, DateTime FirstFecha)>();
  
         foreach (var it in items)
@@ -414,7 +402,6 @@ public class BomberoController : ControllerBase
                 {
                     c.Members.Add((it.Id, lat, lon));
                     if (it.FechaCreacion < c.FirstFecha) c.FirstFecha = it.FechaCreacion;
-                    // update centroid as average of member coordinates
                     var n = c.Members.Count;
                     c.Lat = (c.Lat * (n - 1) + lat) / n;
                     c.Lon = (c.Lon * (n - 1) + lon) / n;
@@ -429,12 +416,9 @@ public class BomberoController : ControllerBase
                 clusters.Add((Lat: lat, Lon: lon, Members: new List<(int, double, double)> { (it.Id, lat, lon) }, FirstFecha: it.FechaCreacion));
             }
         }
- 
-        // proyectar resultado y calcular radiusMeters por cluster (máx distancia a centroid + buffer)
         var result = clusters
             .Select(c =>
             {
-                // calcular radio en metros
                 var maxDist = c.Members.Count == 0 ? 0.0 :
                     c.Members.Max(m => DistanceMeters(c.Lat, c.Lon, m.Lat, m.Lon));
                 var radius = Math.Max(150.0, maxDist + 100.0); // al menos 150m, buffer 100m
@@ -452,5 +436,111 @@ public class BomberoController : ControllerBase
             .ToList();
  
         return Ok(new { total = items.Count, points = result, month = start.Month, year = start.Year });
+    }
+
+    [HttpGet("estaciones/{idEstacion:int}/metricas/response-time")]
+    [Authorize(Policy = "BomberoOnly")]
+    public async Task<IActionResult> GetResponseTimeByEstacion(int idEstacion, [FromQuery] int? month, [FromQuery] int? year, CancellationToken ct)
+    {
+        var uid = GetUserId(User);
+        if (uid is null) return Unauthorized();
+
+        var estacion = await _db.Estaciones.AsNoTracking().FirstOrDefaultAsync(e => e.Id == idEstacion, ct);
+        if (estacion == null) return NotFound(new { mensaje = "Estación no encontrada." });
+        if (estacion.IdUsuario != uid.Value) return Forbid("La estación no pertenece al usuario autenticado.");
+
+        var now = DateTime.UtcNow;
+        var applyMonth = month ?? now.Month;
+        var applyYear = year ?? now.Year;
+        DateTime start;
+        try { start = new DateTime(applyYear, applyMonth, 1, 0, 0, 0, DateTimeKind.Utc); }
+        catch { start = new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc); }
+        var end = start.AddMonths(1);
+
+        // CORRECCIÓN: filtrar por RespuestaUtc (fecha de aceptación) en lugar de FechaCreacion
+        var items = await (
+            from a in _db.Asignaciones.AsNoTracking()
+            join r in _db.Reportes.AsNoTracking() on a.IdReporte equals r.Id
+            where a.IdEstacion == idEstacion
+                  && a.RespuestaUtc != null
+                  && a.RespuestaUtc >= start && a.RespuestaUtc < end  // CAMBIO AQUÍ
+            select new { AsignacionId = a.Id, ReporteId = r.Id, FechaCreacion = r.FechaCreacion, Respuesta = a.RespuestaUtc }
+        ).ToListAsync(ct);
+
+        if (items.Count == 0)
+        {
+            return Ok(new
+            {
+                averageMinutes = 0.0,
+                distribution = new { green = 0, yellow = 0, orange = 0, red = 0 },
+                month = start.Month,
+                year = start.Year,
+                message = "No hay datos para el periodo."
+            });
+        }
+
+        DateTimeOffset? ToDto(object? v)
+        {
+            if (v == null) return null;
+            if (v is DateTimeOffset dto) return dto.ToUniversalTime();
+            if (v is DateTime dt)
+            {
+                if (dt.Kind == DateTimeKind.Unspecified)
+                {
+                    if (DateTimeOffset.TryParse(dt.ToString("o"), out var p)) return p.ToUniversalTime();
+                    return new DateTimeOffset(DateTime.SpecifyKind(dt, DateTimeKind.Utc)).ToUniversalTime();
+                }
+                return new DateTimeOffset(dt).ToUniversalTime();
+            }
+            if (DateTimeOffset.TryParse(v.ToString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed))
+                return parsed.ToUniversalTime();
+            return null;
+        }
+
+        var secsList = new List<double>();
+        foreach (var it in items)
+        {
+            var f = ToDto(it.FechaCreacion);
+            var r = ToDto(it.Respuesta);
+            if (!f.HasValue || !r.HasValue) continue;
+
+            // truncar a segundos para eliminar microsegundos
+            var fTr = new DateTimeOffset(f.Value.UtcDateTime.AddTicks(-(f.Value.UtcDateTime.Ticks % TimeSpan.TicksPerSecond)), TimeSpan.Zero);
+            var rTr = new DateTimeOffset(r.Value.UtcDateTime.AddTicks(-(r.Value.UtcDateTime.Ticks % TimeSpan.TicksPerSecond)), TimeSpan.Zero);
+
+            var diffSec = (rTr - fTr).TotalSeconds;
+            if (diffSec < 0) diffSec = 0;  // evitar negativos
+            secsList.Add(diffSec);
+        }
+
+        if (secsList.Count == 0)
+        {
+            return Ok(new
+            {
+                averageMinutes = 0.0,
+                distribution = new { green = 0, yellow = 0, orange = 0, red = 0 },
+                month = start.Month,
+                year = start.Year,
+                message = "No hay datos válidos para el periodo."
+            });
+        }
+
+        // convertir a minutos con dos decimales
+        var minutesList = secsList.Select(s => Math.Round(s / 60.0, 2)).ToList();
+        var avg = Math.Round(minutesList.Average(), 2);
+
+        // distribución por colores
+        var green = minutesList.Count(m => m < 1.0);
+        var yellow = minutesList.Count(m => m >= 1.0 && m < 10.0);
+        var orange = minutesList.Count(m => m >= 10.0 && m < 21.0);
+        var red = minutesList.Count(m => m >= 21.0);
+
+        return Ok(new
+        {
+            averageMinutes = avg,
+            distribution = new { green, yellow, orange, red },
+            month = start.Month,
+            year = start.Year
+        });
     }
 }
