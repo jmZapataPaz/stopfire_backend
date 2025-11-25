@@ -1,7 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using StopFire.Api.Data;
-using StopFire.Api.Dtos;
 using StopFire.Api.Models;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
@@ -21,6 +20,8 @@ using Microsoft.AspNetCore.SignalR;
 using NetTopologySuite.Geometries;
 using System.Globalization;
 using System.ComponentModel.DataAnnotations;
+using stopfire_backend.Dtos.autenticacion;
+using stopfire_backend.Dtos.cuenta;
 
 namespace StopFire.Api.Controllers;
 

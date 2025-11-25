@@ -15,6 +15,7 @@ public class StopFireDbContext : DbContext
     public DbSet<Estacion> Estaciones => Set<Estacion>();
     public DbSet<Reporte> Reportes => Set<Reporte>();
     public DbSet<Asignacion> Asignaciones => Set<Asignacion>();
+    public DbSet<Hidrante> Hidrantes => Set<Hidrante>();
 
     private static double? ParseNullableDouble(string? v)
         => string.IsNullOrWhiteSpace(v) ? null :
@@ -141,6 +142,27 @@ public class StopFireDbContext : DbContext
             b.Property(x => x.CronometroMinutos).HasColumnName("cronometro").HasDefaultValue(2);
             b.HasOne(x => x.Reporte).WithMany().HasForeignKey(x => x.IdReporte);
             b.HasOne(x => x.Estacion).WithMany().HasForeignKey(x => x.IdEstacion);
+        });
+
+        modelBuilder.Entity<Hidrante>(b =>
+        {
+            b.ToTable("hidrantes");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            b.Property(x => x.Latitud)
+                .HasColumnName("latitud")
+                .HasConversion(doubleStringConverter)
+                .HasMaxLength(50)
+                .IsRequired(false);
+            b.Property(x => x.Longitud)
+                .HasColumnName("longitud")
+                .HasConversion(doubleStringConverter)
+                .HasMaxLength(50)
+                .IsRequired(false);
+            b.Property(x => x.Geom)
+                .HasColumnName("geom")
+                .HasColumnType("geometry(Point,4326)")
+                .IsRequired(false);
         });
 
         modelBuilder.Entity<Reporte>(e =>

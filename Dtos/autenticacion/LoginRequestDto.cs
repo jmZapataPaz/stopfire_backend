@@ -1,6 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 
-namespace StopFire.Api.Dtos;
+namespace stopfire_backend.Dtos.autenticacion;
 
 public class LoginRequestDto
 {

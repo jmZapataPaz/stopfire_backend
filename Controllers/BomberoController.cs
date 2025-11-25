@@ -543,4 +543,62 @@ public class BomberoController : ControllerBase
             year = start.Year
         });
     }
+
+    [HttpGet("hidrantes")]
+    [Authorize(Policy = "BomberoOnly")]
+    public async Task<IActionResult> GetHidrantes(CancellationToken ct = default)
+    {
+        var uid = GetUserId(User);
+        if (uid is null) return Unauthorized();
+
+        var writer = new GeoJsonWriter();
+
+        var raw = await _db.Hidrantes
+            .AsNoTracking()
+            .Select(h => new { h.Id, h.Latitud, h.Longitud, h.Geom })
+            .OrderBy(x => x.Id)
+            .ToListAsync(ct);
+
+        var lista = raw.Select(h => new BomberoHidranteDto
+        {
+            Id = h.Id,
+            Latitud = h.Latitud ?? h.Geom?.Y,
+            Longitud = h.Longitud ?? h.Geom?.X,
+            GeomWkt = h.Geom?.AsText(),
+            GeomGeoJson = h.Geom != null ? writer.Write(h.Geom) : null,
+            GeomInternal = h.Geom
+        }).ToList();
+
+        return Ok(lista);
+    }
+
+    [HttpGet("hidrantes/{id:int}")]
+    [Authorize(Policy = "BomberoOnly")]
+    public async Task<IActionResult> GetHidrantePorId(int id, CancellationToken ct = default)
+    {
+        var uid = GetUserId(User);
+        if (uid is null) return Unauthorized();
+
+        var writer = new GeoJsonWriter();
+
+        var h = await _db.Hidrantes
+            .AsNoTracking()
+            .Where(x => x.Id == id)
+            .Select(x => new { x.Id, x.Latitud, x.Longitud, x.Geom })
+            .FirstOrDefaultAsync(ct);
+
+        if (h == null) return NotFound(new { mensaje = "Hidrante no encontrado." });
+
+        var dto = new BomberoHidranteDto
+        {
+            Id = h.Id,
+            Latitud = h.Latitud ?? h.Geom?.Y,
+            Longitud = h.Longitud ?? h.Geom?.X,
+            GeomWkt = h.Geom?.AsText(),
+            GeomGeoJson = h.Geom != null ? writer.Write(h.Geom) : null,
+            GeomInternal = h.Geom
+        };
+
+        return Ok(dto);
+    }
 }
