@@ -46,7 +46,8 @@ public class AdminController : ControllerBase
             Correo = correo,
             Celular = dto.Celular.Trim(),
             Contrasena = hash,
-            RolId = 2
+            RolId = 2,
+            Estado = true // NUEVO
         };
 
         _db.Usuarios.Add(usuario);
@@ -65,7 +66,17 @@ public class AdminController : ControllerBase
         if (rolId.HasValue) q = q.Where(u => u.RolId == rolId.Value);
 
         var datos = await q.OrderBy(u => u.Id)
-            .Select(u => new { u.Id, u.Nombre, u.Apellido, u.Ci, u.Correo, u.Celular, u.RolId })
+            .Select(u => new
+            {
+                u.Id,
+                u.Nombre,
+                u.Apellido,
+                u.Ci,
+                u.Correo,
+                u.Celular,
+                u.RolId,
+                u.UltimoIngreso
+            })
             .ToListAsync(ct);
 
         return Ok(datos);
@@ -78,7 +89,18 @@ public class AdminController : ControllerBase
             .AsNoTracking()
             .Where(u => u.RolId == 2)
             .OrderBy(u => u.Id)
-            .Select(u => new { u.Id, u.Nombre, u.Apellido, u.Ci, u.Correo, u.Celular, u.RolId })
+            .Select(u => new
+            {
+                u.Id,
+                u.Nombre,
+                u.Apellido,
+                u.Ci,
+                u.Correo,
+                u.Celular,
+                u.RolId,
+                u.UltimoIngreso,
+                u.Estado // NUEVO
+            })
             .ToListAsync(ct);
 
         return Ok(datos);
@@ -160,6 +182,22 @@ public class AdminController : ControllerBase
         _db.Estaciones.Add(estacion);
         await _db.SaveChangesAsync(ct);
 
+        // NUEVO: registrar propietario inicial
+        var resp = await _db.Usuarios.AsNoTracking()
+            .Where(u => u.Id == userId)
+            .Select(u => new { u.Id, Nombre = (u.Nombre + " " + u.Apellido).Trim() })
+            .FirstAsync(ct);
+
+        _db.RegistrosCapitanes.Add(new RegistroCapitanEstacion
+        {
+            EstacionId = estacion.Id,
+            EstacionNombre = estacion.Nombre,
+            ResponsableId = resp.Id,
+            ResponsableNombre = resp.Nombre,
+            Fecha = DateTime.UtcNow
+        });
+        await _db.SaveChangesAsync(ct);
+
         return CreatedAtAction(nameof(ObtenerEstacionPorId), new { id = estacion.Id }, estacion);
     }
 
@@ -219,6 +257,9 @@ public class AdminController : ControllerBase
         var e = await _db.Estaciones.FirstOrDefaultAsync(x => x.Id == id, ct);
         if (e is null) return NotFound();
 
+        // NUEVO: capturar propietario anterior ANTES de modificar
+        var propietarioAnteriorId = e.IdUsuario;
+
         if (dto.IdUsuario.HasValue)
         {
             var existeUsuario = await _db.Usuarios.AnyAsync(u => u.Id == dto.IdUsuario.Value, ct);
@@ -252,16 +293,188 @@ public class AdminController : ControllerBase
         }
 
         await _db.SaveChangesAsync(ct);
+
+        // NUEVO: si cambió el propietario, registrar el cambio
+        if (dto.IdUsuario.HasValue && dto.IdUsuario.Value != propietarioAnteriorId)
+        {
+            var nuevoResp = await _db.Usuarios.AsNoTracking()
+                .Where(u => u.Id == dto.IdUsuario.Value)
+                .Select(u => new { u.Id, Nombre = (u.Nombre + " " + u.Apellido).Trim() })
+                .FirstAsync(ct);
+
+            _db.RegistrosCapitanes.Add(new RegistroCapitanEstacion
+            {
+                EstacionId = e.Id,
+                EstacionNombre = e.Nombre,
+                ResponsableId = nuevoResp.Id,
+                ResponsableNombre = nuevoResp.Nombre,
+                Fecha = DateTime.UtcNow
+            });
+            await _db.SaveChangesAsync(ct);
+        }
+
         return NoContent();
     }
 
-    [HttpDelete("estaciones/{id:int}")]
-    public async Task<IActionResult> EliminarEstacion(int id, CancellationToken ct)
+    [HttpPut("estaciones/{id:int}/estado")]
+    public async Task<IActionResult> CambiarEstadoEstacion(int id, [FromBody] JsonObject body, CancellationToken ct)
     {
         var e = await _db.Estaciones.FirstOrDefaultAsync(x => x.Id == id, ct);
         if (e is null) return NotFound();
 
-        _db.Estaciones.Remove(e);
+        if (!body.TryGetPropertyValue("estado", out var v) || v is null) 
+            return BadRequest(new { mensaje = "Debe enviar { estado: true|false }" });
+
+        var estado = v!.GetValue<bool>();
+        e.Estado = estado;
+        await _db.SaveChangesAsync(ct);
+        return NoContent();
+    }
+
+    [HttpDelete("estaciones/{id:int}")]
+    public async Task<IActionResult> DarDeBajaEstacion(int id, CancellationToken ct)
+    {
+        var e = await _db.Estaciones.FirstOrDefaultAsync(x => x.Id == id, ct);
+        if (e is null) return NotFound();
+
+        // Dar de baja: estado=false en vez de borrar
+        e.Estado = false;
+        await _db.SaveChangesAsync(ct);
+        return NoContent();
+    }
+
+    [HttpGet("registros-estaciones")]
+    [Authorize]
+    public async Task<IActionResult> ListarRegistrosEstaciones(
+        [FromQuery] int? estacionId,
+        [FromQuery] int? responsableId,
+        [FromQuery] int? year,
+        [FromQuery] int? month,
+        CancellationToken ct = default)
+    {
+        var q = _db.RegistrosCapitanes.AsNoTracking();
+
+        if (estacionId.HasValue) q = q.Where(r => r.EstacionId == estacionId.Value);
+        if (responsableId.HasValue) q = q.Where(r => r.ResponsableId == responsableId.Value);
+        if (year.HasValue) q = q.Where(r => r.Fecha.Year == year.Value);
+        if (month.HasValue) q = q.Where(r => r.Fecha.Month == month.Value);
+
+        var list = await q
+            .OrderByDescending(r => r.Fecha)
+            .Select(r => new {
+                r.Id,
+                r.EstacionId,
+                r.EstacionNombre,
+                r.ResponsableId,
+                r.ResponsableNombre,
+                r.Fecha
+            })
+            .ToListAsync(ct);
+
+        return Ok(list);
+    }
+
+    // NUEVO: cambiar estado (dar de baja / activar)
+    [HttpPut("usuarios/bomberos/{id:int}/estado")]
+    public async Task<IActionResult> CambiarEstadoBombero(int id, [FromBody] JsonObject body, CancellationToken ct)
+    {
+        var u = await _db.Usuarios.FirstOrDefaultAsync(x => x.Id == id && x.RolId == 2, ct);
+        if (u is null) return NotFound(new { mensaje = "Bombero no encontrado." });
+
+        if (!body.TryGetPropertyValue("estado", out var v) || v is null)
+            return BadRequest(new { mensaje = "Debe enviar { estado: true|false }" });
+
+        u.Estado = v!.GetValue<bool>();
+        await _db.SaveChangesAsync(ct);
+        return NoContent();
+    }
+
+    [HttpGet("hidrantes")]
+    public async Task<IActionResult> ListarHidrantes(CancellationToken ct)
+    {
+        var list = await _db.Hidrantes
+            .AsNoTracking()
+            .OrderBy(h => h.Id)
+            .Select(h => new {
+                h.Id,
+                h.Latitud,
+                h.Longitud,
+                h.Descripcion,
+                h.Estado
+            })
+            .ToListAsync(ct);
+        return Ok(list);
+    }
+
+    public sealed class AdminCrearHidranteDto
+    {
+        public double Latitud { get; set; }
+        public double Longitud { get; set; }
+        public string? Descripcion { get; set; }
+        public bool? Estado { get; set; }
+    }
+
+    [HttpPost("hidrantes")]
+    public async Task<IActionResult> CrearHidrante([FromBody] AdminCrearHidranteDto dto, CancellationToken ct)
+    {
+        var p = new Point(dto.Longitud, dto.Latitud) { SRID = 4326 };
+        var estado = dto.Estado ?? true; // fuerza true si viene null
+
+        var h = new Hidrante
+        {
+            Latitud = dto.Latitud,
+            Longitud = dto.Longitud,
+            Descripcion = string.IsNullOrWhiteSpace(dto.Descripcion) ? null : dto.Descripcion!.Trim(),
+            Estado = estado,
+            Geom = p
+        };
+        _db.Hidrantes.Add(h);
+        await _db.SaveChangesAsync(ct);
+        return CreatedAtAction(nameof(ObtenerHidrantePorId), new { id = h.Id }, new {
+            h.Id, h.Latitud, h.Longitud, h.Descripcion, h.Estado
+        });
+    }
+
+    [HttpGet("hidrantes/{id:int}")]
+    public async Task<IActionResult> ObtenerHidrantePorId(int id, CancellationToken ct)
+    {
+        var h = await _db.Hidrantes.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id, ct);
+        if (h is null) return NotFound();
+        return Ok(new { h.Id, h.Latitud, h.Longitud, h.Descripcion, h.Estado });
+    }
+
+    public sealed class AdminActualizarHidranteDto
+    {
+        public double Latitud { get; set; }
+        public double Longitud { get; set; }
+        public string? Descripcion { get; set; }
+    }
+
+    [HttpPut("hidrantes/{id:int}")]
+    public async Task<IActionResult> ActualizarHidrante(int id, [FromBody] AdminActualizarHidranteDto dto, CancellationToken ct)
+    {
+        var h = await _db.Hidrantes.FirstOrDefaultAsync(x => x.Id == id, ct);
+        if (h is null) return NotFound();
+
+        h.Latitud = dto.Latitud;
+        h.Longitud = dto.Longitud;
+        h.Descripcion = string.IsNullOrWhiteSpace(dto.Descripcion) ? null : dto.Descripcion!.Trim();
+        h.Geom = new Point(dto.Longitud, dto.Latitud) { SRID = 4326 };
+
+        await _db.SaveChangesAsync(ct);
+        return NoContent();
+    }
+
+    [HttpPut("hidrantes/{id:int}/estado")]
+    public async Task<IActionResult> CambiarEstadoHidrante(int id, [FromBody] System.Text.Json.Nodes.JsonObject body, CancellationToken ct)
+    {
+        var h = await _db.Hidrantes.FirstOrDefaultAsync(x => x.Id == id, ct);
+        if (h is null) return NotFound();
+
+        if (!body.TryGetPropertyValue("estado", out var v) || v is null)
+            return BadRequest(new { mensaje = "Debe enviar { estado: true|false }" });
+
+        h.Estado = v!.GetValue<bool>();
         await _db.SaveChangesAsync(ct);
         return NoContent();
     }

@@ -555,6 +555,7 @@ public class BomberoController : ControllerBase
 
         var raw = await _db.Hidrantes
             .AsNoTracking()
+            .Where(h => h.Estado) // SOLO ACTIVOS
             .Select(h => new { h.Id, h.Latitud, h.Longitud, h.Geom })
             .OrderBy(x => x.Id)
             .ToListAsync(ct);
@@ -583,11 +584,11 @@ public class BomberoController : ControllerBase
 
         var h = await _db.Hidrantes
             .AsNoTracking()
-            .Where(x => x.Id == id)
+            .Where(x => x.Id == id && x.Estado) // SOLO SI ACTIVO
             .Select(x => new { x.Id, x.Latitud, x.Longitud, x.Geom })
             .FirstOrDefaultAsync(ct);
 
-        if (h == null) return NotFound(new { mensaje = "Hidrante no encontrado." });
+        if (h == null) return NotFound(new { mensaje = "Hidrante no encontrado o inactivo." });
 
         var dto = new BomberoHidranteDto
         {

@@ -9,5 +9,8 @@ namespace StopFire.Api.Models
         public double? Latitud { get; set; }
         public double? Longitud { get; set; }
         public Point? Geom { get; set; }
+        public string? Descripcion {get; set;}
+        public bool Estado {get; set;}
+        
     }
 }

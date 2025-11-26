@@ -71,11 +71,15 @@ public partial class UsuariosController : ControllerBase
 
         var correo = dto.Correo.Trim().ToLowerInvariant();
         var usuario = await _db.Usuarios
-            .AsNoTracking()
             .FirstOrDefaultAsync(u => u.Correo.ToLower() == correo, ct);
 
         if (usuario is null || !BCrypt.Net.BCrypt.Verify(dto.Contrasena, usuario.Contrasena))
             return Unauthorized(new { mensaje = "Credenciales inválidas." });
+
+        // NUEVO: actualizar último ingreso (UTC)
+        usuario.UltimoIngreso = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+
         var estacionId = await _db.Estaciones
             .AsNoTracking()
             .Where(e => e.IdUsuario == usuario.Id)
@@ -93,7 +97,8 @@ public partial class UsuariosController : ControllerBase
                 usuario.Apellido,
                 usuario.Correo,
                 usuario.Celular,
-                usuario.RolId
+                usuario.RolId,
+                UltimoIngreso = usuario.UltimoIngreso
             }
         });
     }
@@ -163,15 +168,17 @@ public partial class UsuariosController : ControllerBase
         return new JwtSecurityTokenHandler().WriteToken(token);
     }
 
+    // GET para ciudadanos: devolver solo estaciones activas (estado=true)
     [HttpGet("estaciones")]
-    public async Task<IActionResult> ListarEstacionesPublic(CancellationToken ct)
+    public async Task<IActionResult> ListarEstacionesPublicas(CancellationToken ct)
     {
         var estaciones = await _db.Estaciones
             .AsNoTracking()
+            .Where(e => e.Estado == true) // solo activas
             .OrderBy(e => e.Id)
             .ToListAsync(ct);
 
-        var writer = new GeoJsonWriter();
+        var writer = new NetTopologySuite.IO.GeoJsonWriter();
         var datos = estaciones.Select(e => new
         {
             e.Id,
@@ -182,7 +189,7 @@ public partial class UsuariosController : ControllerBase
             e.DescripcionDireccion,
             e.Celular,
             e.Estado,
-            cobertura = e.Cobertura is null ? null : JsonNode.Parse(writer.Write(e.Cobertura))
+            cobertura = e.Cobertura is null ? null : System.Text.Json.Nodes.JsonNode.Parse(writer.Write(e.Cobertura))
         });
 
         return Ok(datos);
@@ -633,5 +640,27 @@ public partial class UsuariosController : ControllerBase
             usuario.Apellido,
             usuario.Correo
         });
+    }
+
+    // NUEVO: registrar último ingreso usando el token (para auto-login)
+    [HttpPost("ultimo-ingreso")]
+    [Authorize]
+    public async Task<IActionResult> RegistrarUltimoIngreso(CancellationToken ct)
+    {
+        // obtener userId desde el token
+        var userIdStr =
+            User.FindFirstValue(ClaimTypes.NameIdentifier) ??
+            User.FindFirstValue(JwtRegisteredClaimNames.Sub) ??
+            User.FindFirstValue("sub");
+        if (string.IsNullOrWhiteSpace(userIdStr) || !int.TryParse(userIdStr, out var userId))
+            return Unauthorized(new { mensaje = "No se pudo determinar el usuario desde el token." });
+
+        var u = await _db.Usuarios.FirstOrDefaultAsync(x => x.Id == userId, ct);
+        if (u is null) return NotFound(new { mensaje = "Usuario no encontrado." });
+
+        u.UltimoIngreso = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+
+        return NoContent();
     }
 }

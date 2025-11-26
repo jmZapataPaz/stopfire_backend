@@ -16,6 +16,7 @@ public class StopFireDbContext : DbContext
     public DbSet<Reporte> Reportes => Set<Reporte>();
     public DbSet<Asignacion> Asignaciones => Set<Asignacion>();
     public DbSet<Hidrante> Hidrantes => Set<Hidrante>();
+    public DbSet<RegistroCapitanEstacion> RegistrosCapitanes { get; set; }
 
     private static double? ParseNullableDouble(string? v)
         => string.IsNullOrWhiteSpace(v) ? null :
@@ -69,6 +70,7 @@ public class StopFireDbContext : DbContext
             b.Property(x => x.Celular).HasColumnName("celular").IsRequired();
             b.Property(x => x.Contrasena).HasColumnName("contraseña").IsRequired();
             b.Property(x => x.RolId).HasColumnName("rol_id").HasDefaultValue(3);
+            b.Property(x => x.Estado).HasColumnName("estado").HasDefaultValue(true);
             b.HasOne(x => x.Rol)
                 .WithMany(r => r.Usuarios)
                 .HasForeignKey(x => x.RolId);
@@ -163,6 +165,13 @@ public class StopFireDbContext : DbContext
                 .HasColumnName("geom")
                 .HasColumnType("geometry(Point,4326)")
                 .IsRequired(false);
+            b.Property(x => x.Descripcion).HasColumnName("descripcion").IsRequired(false);
+
+            // Asegurar NOT NULL + default true
+            b.Property(x => x.Estado)
+                .HasColumnName("estado")
+                .IsRequired()
+                .HasDefaultValue(true);
         });
 
         modelBuilder.Entity<Reporte>(e =>
