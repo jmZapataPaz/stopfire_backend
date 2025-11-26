@@ -5,7 +5,7 @@ namespace StopFire.Api.Dtos.Reportes;
 
 public class CrearReporteDto
 {
-    [MinLength(2, ErrorMessage = "La descripción debe tener al menos 2 caracteres si se envía.")]
+    [MinLength(2, ErrorMessage = "La descripciï¿½n debe tener al menos 2 caracteres si se envï¿½a.")]
     public string? Descripcion { get; set; }
     [Required]
     public string Latitud { get; set; } = string.Empty;
@@ -14,4 +14,5 @@ public class CrearReporteDto
     [Required(ErrorMessage = "La foto es obligatoria.")]
     public IFormFile Foto { get; set; } = default!;
     public string? ImagenUrl { get; internal set; }
+    public string? Direccion{get;set;}
 }

@@ -76,7 +76,6 @@ public partial class UsuariosController : ControllerBase
         if (usuario is null || !BCrypt.Net.BCrypt.Verify(dto.Contrasena, usuario.Contrasena))
             return Unauthorized(new { mensaje = "Credenciales inválidas." });
 
-        // NUEVO: actualizar último ingreso (UTC)
         usuario.UltimoIngreso = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
 
@@ -168,13 +167,12 @@ public partial class UsuariosController : ControllerBase
         return new JwtSecurityTokenHandler().WriteToken(token);
     }
 
-    // GET para ciudadanos: devolver solo estaciones activas (estado=true)
     [HttpGet("estaciones")]
     public async Task<IActionResult> ListarEstacionesPublicas(CancellationToken ct)
     {
         var estaciones = await _db.Estaciones
             .AsNoTracking()
-            .Where(e => e.Estado == true) // solo activas
+            .Where(e => e.Estado == true) 
             .OrderBy(e => e.Id)
             .ToListAsync(ct);
 
@@ -330,7 +328,6 @@ public partial class UsuariosController : ControllerBase
             var baseUrl = $"{Request.Scheme}://{Request.Host}{Request.PathBase}";
             fotoUrl = $"{baseUrl}/reportes/{fileName}";
         }
-        //falta geometria
         var latitudValida = double.TryParse(dto.Latitud.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var latitud);
         var longitudValida = double.TryParse(dto.Longitud.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var longitud);
         if (!latitudValida || !longitudValida)
@@ -343,6 +340,7 @@ public partial class UsuariosController : ControllerBase
             FotoUrl = fotoUrl,
             Latitud = latitud,
             Longitud = longitud,
+            Direccion = string.IsNullOrWhiteSpace(dto.Direccion) ? null : dto.Direccion!.Trim(), 
             Estado = "PENDIENTE",
             FechaCreacion = DateTime.UtcNow 
         };
@@ -351,7 +349,6 @@ public partial class UsuariosController : ControllerBase
         _db.Reportes.Add(reporte);
         await _db.SaveChangesAsync(ct);
 
-        // NUEVO: cargar datos del usuario para incluir en el payload (no rompe a quien no los usa)
         var u = await _db.Usuarios
             .AsNoTracking()
             .Where(x => x.Id == userId.Value)
@@ -393,6 +390,7 @@ public partial class UsuariosController : ControllerBase
             PrimeraCandidata = primeraCandidataId,
             Confirmaciones = reporte.Confirmaciones ?? 0,
             RiesgoPercent = riesgoPercent,
+            Direccion = reporte.Direccion, // AGREGADO
             usuarioNombre = $"{u.Nombre} {u.Apellido}".Trim(),
             usuarioCi = u.Ci,
             usuarioCelular = u.Celular,
@@ -404,17 +402,12 @@ public partial class UsuariosController : ControllerBase
             await _hub.Clients.Group($"estacion_{primeraCandidataId.Value}")
                 .SendAsync("ReportePendiente", new
                 {
-                    // existentes
                     ReporteId = reporte.Id,
                     Candidata = primeraCandidataId.Value,
                     reporte.Descripcion,
                     reporte.Latitud,
                     reporte.Longitud,
-
-                    // QUITAR DUPLICADO que colisiona:
-                    // descripcion = reporte.Descripcion,
-
-                    // persona
+                    Direccion = reporte.Direccion, // AGREGADO
                     usuarioNombre = $"{u.Nombre} {u.Apellido}".Trim(),
                     usuarioCi = u.Ci,
                     usuarioCelular = u.Celular,
@@ -424,7 +417,6 @@ public partial class UsuariosController : ControllerBase
 
         return CreatedAtAction(nameof(ObtenerReportePorId), new { id = reporte.Id }, new
         {
-            // existentes
             reporte.Id,
             reporte.IdUsuario,
             reporte.Descripcion,
@@ -433,12 +425,7 @@ public partial class UsuariosController : ControllerBase
             reporte.Longitud,
             reporte.Estado,
             primeraCandidata = primeraCandidataId,
-
-            // QUITAR DUPLICADOS que colisionan:
-            // descripcion = reporte.Descripcion,
-            // imagenUrl = reporte.FotoUrl,
-
-            // persona
+            Direccion = reporte.Direccion, // AGREGADO
             usuarioNombre = $"{u.Nombre} {u.Apellido}".Trim(),
             usuarioCi = u.Ci,
             usuarioCelular = u.Celular,
@@ -462,6 +449,7 @@ public partial class UsuariosController : ControllerBase
                 r.Longitud,
                 r.Estado,
                 r.FechaCreacion,
+                r.Direccion, // AGREGADO
                 Confirmaciones = r.Confirmaciones ?? 0,
                 RiesgoPercent = Math.Min(100, (r.Confirmaciones ?? 0) * 20),
                 UsuarioNombre = _db.Usuarios
@@ -534,7 +522,6 @@ public partial class UsuariosController : ControllerBase
         if (usuarioId.HasValue)
             q = q.Where(r => r.IdUsuario == usuarioId.Value);
 
-        // 1) Filtro SQL por bounding box (evita traducción espacial no soportada)
         if (lat.HasValue && lon.HasValue && radiusMeters.HasValue)
         {
             var degLat = radiusMeters.Value / 111320.0;
@@ -549,7 +536,6 @@ public partial class UsuariosController : ControllerBase
                 r.Longitud >= minLon && r.Longitud <= maxLon);
         }
 
-        // 2) Traer datos y proyectar
         var prelim = await q
             .OrderByDescending(r => r.FechaCreacion)
             .Select(r => new
@@ -562,11 +548,9 @@ public partial class UsuariosController : ControllerBase
                 r.Longitud,
                 r.Estado,
                 r.FechaCreacion,
+                r.Direccion, 
                 Confirmaciones = r.Confirmaciones ?? 0,
-                // AGREGADO: RiesgoPercent calculado en servidor (mantener dentro del resultado)
                 RiesgoPercent = Math.Min(100, (r.Confirmaciones ?? 0) * 20),
-
-                // AGREGADO: datos del ciudadano reportante al mismo nivel (no anidados)
                 UsuarioNombre = _db.Usuarios
                     .AsNoTracking()
                     .Where(u => u.Id == r.IdUsuario)
@@ -592,7 +576,6 @@ public partial class UsuariosController : ControllerBase
             })
             .ToListAsync(ct);
 
-        // 3) Filtro espacial preciso en memoria (evita error de traducción LINQ)
         if (lat.HasValue && lon.HasValue && radiusMeters.HasValue)
         {
             var center = _geometryFactory.CreatePoint(new Coordinate(lon.Value, lat.Value));
@@ -642,12 +625,10 @@ public partial class UsuariosController : ControllerBase
         });
     }
 
-    // NUEVO: registrar último ingreso usando el token (para auto-login)
     [HttpPost("ultimo-ingreso")]
     [Authorize]
     public async Task<IActionResult> RegistrarUltimoIngreso(CancellationToken ct)
     {
-        // obtener userId desde el token
         var userIdStr =
             User.FindFirstValue(ClaimTypes.NameIdentifier) ??
             User.FindFirstValue(JwtRegisteredClaimNames.Sub) ??

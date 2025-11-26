@@ -236,7 +236,8 @@ public class BomberoController : ControllerBase
                 Latitud = r.Latitud,
                 Longitud = r.Longitud,
                 FotoUrl = r.FotoUrl,
-                FechaCreacion = r.FechaCreacion
+                FechaCreacion = r.FechaCreacion,
+                Direccion = r.Direccion, // NUEVO
             }
         ).ToListAsync(ct);
 

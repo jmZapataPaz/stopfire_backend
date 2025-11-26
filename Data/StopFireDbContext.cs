@@ -116,11 +116,12 @@ public class StopFireDbContext : DbContext
                 .HasMaxLength(50)
                 .IsRequired();
 
-            // NUEVO: permitir NULL en BD y usar default 0
             b.Property(x => x.Confirmaciones)
                 .HasColumnName("Confirmaciones")
                 .IsRequired(false)
                 .HasDefaultValue(0);
+
+            b.Property(x => x.Direccion).HasColumnName("direccion").IsRequired(false); // NUEVO
 
             b.HasOne(x => x.Usuario)
                 .WithMany()

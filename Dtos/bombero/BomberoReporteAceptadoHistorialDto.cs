@@ -12,6 +12,7 @@ public sealed class BomberoReporteAceptadoHistorialDto
     public double? Latitud { get; set; }
     public double? Longitud { get; set; }
     public string? FotoUrl { get; set; }
+    public string? Direccion { get; set; }
 
     public DateTime? FechaCreacion { get; set; }
 }
