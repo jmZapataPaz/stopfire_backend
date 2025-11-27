@@ -9,7 +9,5 @@ public class ActualizarUsuarioDto
 
     [Required, StringLength(100)]
     public string Apellido { get; set; } = string.Empty;
-
-    [Required, EmailAddress, StringLength(200)]
-    public string Correo { get; set; } = string.Empty;
+    public string Celular { get; set; } = string.Empty; // CAMBIO: reemplaza correo
 }

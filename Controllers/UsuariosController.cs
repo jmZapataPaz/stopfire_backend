@@ -604,16 +604,15 @@ public partial class UsuariosController : ControllerBase
         var usuario = await _db.Usuarios.FirstOrDefaultAsync(u => u.Id == id, ct);
         if (usuario is null) return NotFound(new { mensaje = "Usuario no encontrado." });
 
-        var correoNorm = dto.Correo.Trim().ToLowerInvariant();
-        var existeCorreo = await _db.Usuarios
-            .AsNoTracking()
-            .AnyAsync(u => u.Id != id && u.Correo.ToLower() == correoNorm, ct);
-        if (existeCorreo)
-            return Conflict(new { mensaje = "El correo ya está en uso por otro usuario." });
+        var celularNorm = dto.Celular.Trim();
+        if (string.IsNullOrWhiteSpace(celularNorm))
+            return BadRequest(new { mensaje = "Celular es requerido." });
+        if (!System.Text.RegularExpressions.Regex.IsMatch(celularNorm, @"^[0-9]{8,15}$"))
+            return BadRequest(new { mensaje = "Celular inválido (solo dígitos 8-15)." });
 
         usuario.Nombre = dto.Nombre.Trim();
         usuario.Apellido = dto.Apellido.Trim();
-        usuario.Correo = dto.Correo.Trim();
+        usuario.Celular = celularNorm;
 
         await _db.SaveChangesAsync(ct);
 
@@ -622,7 +621,7 @@ public partial class UsuariosController : ControllerBase
             usuario.Id,
             usuario.Nombre,
             usuario.Apellido,
-            usuario.Correo
+            usuario.Celular
         });
     }
 
