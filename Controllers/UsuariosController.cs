@@ -22,6 +22,7 @@ using System.Globalization;
 using System.ComponentModel.DataAnnotations;
 using stopfire_backend.Dtos.autenticacion;
 using stopfire_backend.Dtos.cuenta;
+using System.Text.RegularExpressions;
 
 namespace StopFire.Api.Controllers;
 
@@ -377,7 +378,7 @@ public partial class UsuariosController : ControllerBase
                 .FirstOrDefaultAsync(ct);
             primeraCandidataId = fallback?.Id;
         }
-        int riesgoPercent = Math.Min(100, (reporte.Confirmaciones ?? 0) * 20); // tolera NULL
+        int riesgoPercent = Math.Min(100, (reporte.Confirmaciones ?? 0) * 20); 
 
         await _hub.Clients.All.SendAsync("ReporteCreado", new
         {
@@ -390,7 +391,7 @@ public partial class UsuariosController : ControllerBase
             PrimeraCandidata = primeraCandidataId,
             Confirmaciones = reporte.Confirmaciones ?? 0,
             RiesgoPercent = riesgoPercent,
-            Direccion = reporte.Direccion, // AGREGADO
+            Direccion = reporte.Direccion, 
             usuarioNombre = $"{u.Nombre} {u.Apellido}".Trim(),
             usuarioCi = u.Ci,
             usuarioCelular = u.Celular,
@@ -407,7 +408,7 @@ public partial class UsuariosController : ControllerBase
                     reporte.Descripcion,
                     reporte.Latitud,
                     reporte.Longitud,
-                    Direccion = reporte.Direccion, // AGREGADO
+                    Direccion = reporte.Direccion, 
                     usuarioNombre = $"{u.Nombre} {u.Apellido}".Trim(),
                     usuarioCi = u.Ci,
                     usuarioCelular = u.Celular,
@@ -425,7 +426,7 @@ public partial class UsuariosController : ControllerBase
             reporte.Longitud,
             reporte.Estado,
             primeraCandidata = primeraCandidataId,
-            Direccion = reporte.Direccion, // AGREGADO
+            Direccion = reporte.Direccion, 
             usuarioNombre = $"{u.Nombre} {u.Apellido}".Trim(),
             usuarioCi = u.Ci,
             usuarioCelular = u.Celular,
@@ -449,7 +450,7 @@ public partial class UsuariosController : ControllerBase
                 r.Longitud,
                 r.Estado,
                 r.FechaCreacion,
-                r.Direccion, // AGREGADO
+                r.Direccion, 
                 Confirmaciones = r.Confirmaciones ?? 0,
                 RiesgoPercent = Math.Min(100, (r.Confirmaciones ?? 0) * 20),
                 UsuarioNombre = _db.Usuarios
@@ -643,5 +644,63 @@ public partial class UsuariosController : ControllerBase
         await _db.SaveChangesAsync(ct);
 
         return NoContent();
+    }
+
+    [HttpPost("contrasena/recuperar/iniciar")]
+    [AllowAnonymous]
+    public async Task<IActionResult> IniciarRecuperacionContrasena([FromBody] RecuperarContrasenaIniciarDto dto, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(dto.Correo))
+            return BadRequest(new { mensaje = "Correo es requerido." });
+
+        var correo = dto.Correo.Trim().ToLowerInvariant();
+        var existe = await _db.Usuarios.AsNoTracking().AnyAsync(u => u.Correo.ToLower() == correo, ct);
+        if (!existe)
+        {
+            // Responder 202 para no filtrar correos existentes
+            return Accepted(new { mensaje = "Si el correo existe, se envió un código OTP." });
+        }
+
+        var otp = RandomNumberGenerator.GetInt32(100000, 1000000).ToString();
+        var key = $"pwd:{correo}";
+        _cache.Set(key, new { Otp = otp }, TimeSpan.FromMinutes(10));
+
+        var asunto = "Código de recuperación de contraseña";
+        var cuerpo = $@"<p>Tu código de recuperación es: <b>{otp}</b></p>
+                        <p>Vence en 10 minutos.</p>";
+        await _emailSender.SendAsync(correo, asunto, cuerpo, ct);
+
+        return Accepted(new { mensaje = "Si el correo existe, se envió un código OTP." });
+    }
+
+    [HttpPost("contrasena/recuperar/verificar")]
+    [AllowAnonymous]
+    public async Task<IActionResult> VerificarRecuperacionContrasena([FromBody] RecuperarContrasenaVerificarDto dto, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(dto.Correo) || string.IsNullOrWhiteSpace(dto.Codigo) || string.IsNullOrWhiteSpace(dto.NuevaContrasena))
+            return BadRequest(new { mensaje = "Datos incompletos." });
+
+        var correo = dto.Correo.Trim().ToLowerInvariant();
+        var key = $"pwd:{correo}";
+        if (!_cache.TryGetValue<object>(key, out var data))
+            return BadRequest(new { mensaje = "codigo vencido" });
+
+        var otpGuardado = (string?)data?.GetType().GetProperty("Otp")?.GetValue(data) ?? string.Empty;
+        if (!string.Equals(dto.Codigo.Trim(), otpGuardado, StringComparison.Ordinal))
+            return BadRequest(new { mensaje = "codigo incorrecto" });
+
+        // Política: mínimo 8, 1 mayúscula, 1 número
+        var strong = Regex.IsMatch(dto.NuevaContrasena, @"^(?=.*[A-Z])(?=.*\d).{8,}$");
+        if (!strong)
+            return BadRequest(new { mensaje = "La contraseña debe tener mínimo 8 caracteres, 1 mayúscula y 1 número." });
+
+        var user = await _db.Usuarios.FirstOrDefaultAsync(u => u.Correo.ToLower() == correo, ct);
+        if (user is null) return BadRequest(new { mensaje = "Usuario no encontrado." });
+
+        user.Contrasena = BCrypt.Net.BCrypt.HashPassword(dto.NuevaContrasena);
+        await _db.SaveChangesAsync(ct);
+        _cache.Remove(key);
+
+        return Ok(new { mensaje = "Contraseña actualizada." });
     }
 }

@@ -603,4 +603,38 @@ public class BomberoController : ControllerBase
 
         return Ok(dto);
     }
+
+    [HttpGet("reportes/mitigados")]
+    [Authorize(Policy = "BomberoOnly")]
+    public async Task<IActionResult> ListarReportesMitigados(
+        [FromQuery] int? month,
+        [FromQuery] int? year,
+        CancellationToken ct = default)
+    {
+        var uid = GetUserId(User);
+        if (uid is null) return Unauthorized();
+
+        var q = _db.Reportes.AsNoTracking()
+            .Where(r => r.Estado.ToUpper() == "MITIGADO");
+
+        if (year.HasValue)
+            q = q.Where(r => r.FechaCreacion.Year == year.Value);
+        if (month.HasValue)
+            q = q.Where(r => r.FechaCreacion.Month == month.Value);
+
+        var list = await q
+            .OrderByDescending(r => r.FechaCreacion)
+            .Select(r => new {
+                id = r.Id,
+                descripcion = r.Descripcion,
+                latitud = r.Latitud,
+                longitud = r.Longitud,
+                fotoUrl = r.FotoUrl,
+                estado = r.Estado,
+                fechaCreacion = r.FechaCreacion
+            })
+            .ToListAsync(ct);
+
+        return Ok(list);
+    }
 }
