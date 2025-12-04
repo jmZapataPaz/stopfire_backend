@@ -77,6 +77,9 @@ public partial class UsuariosController : ControllerBase
         if (usuario is null || !BCrypt.Net.BCrypt.Verify(dto.Contrasena, usuario.Contrasena))
             return Unauthorized(new { mensaje = "Credenciales inválidas." });
 
+        if (usuario.Estado == false)
+            return StatusCode(StatusCodes.Status403Forbidden, new { mensaje = "Su cuenta ha sido dada de baja. Contactese con soporte por favor" });
+
         usuario.UltimoIngreso = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
 
@@ -359,7 +362,7 @@ public partial class UsuariosController : ControllerBase
         var point = _geometryFactory.CreatePoint(new Coordinate(longitud, latitud));
         var contenedoras = await _db.Estaciones
             .AsNoTracking()
-            .Where(e => e.Estado && e.Cobertura != null && e.Cobertura.Contains(point))
+            .Where(e => e.Estado && e.Cobertura != null && e.Cobertura.Contains(point)) // SOLO activas
             .ToListAsync(ct);
 
         int? primeraCandidataId = null;
@@ -369,15 +372,16 @@ public partial class UsuariosController : ControllerBase
                 .OrderBy(e => e.Cobertura!.Centroid.Distance(point))
                 .First().Id;
         }
-        else//latitud y longitud
+        else
         {
             var fallback = await _db.Estaciones
                 .AsNoTracking()
-                .Where(e => e.Estado && e.Cobertura != null)
+                .Where(e => e.Estado && e.Cobertura != null) // SOLO activas
                 .OrderBy(e => e.Cobertura!.Distance(point))
                 .FirstOrDefaultAsync(ct);
             primeraCandidataId = fallback?.Id;
         }
+
         int riesgoPercent = Math.Min(100, (reporte.Confirmaciones ?? 0) * 20); 
 
         await _hub.Clients.All.SendAsync("ReporteCreado", new
@@ -400,20 +404,26 @@ public partial class UsuariosController : ControllerBase
 
         if (primeraCandidataId.HasValue)
         {
-            await _hub.Clients.Group($"estacion_{primeraCandidataId.Value}")
-                .SendAsync("ReportePendiente", new
-                {
-                    ReporteId = reporte.Id,
-                    Candidata = primeraCandidataId.Value,
-                    reporte.Descripcion,
-                    reporte.Latitud,
-                    reporte.Longitud,
-                    Direccion = reporte.Direccion, 
-                    usuarioNombre = $"{u.Nombre} {u.Apellido}".Trim(),
-                    usuarioCi = u.Ci,
-                    usuarioCelular = u.Celular,
-                    usuarioEmail = u.Correo,
-                }, ct);
+            // Verificar que sigue activa antes de notificar
+            var activa = await _db.Estaciones.AsNoTracking()
+                .AnyAsync(e => e.Id == primeraCandidataId.Value && e.Estado, ct);
+            if (activa)
+            {
+                await _hub.Clients.Group($"estacion_{primeraCandidataId.Value}")
+                    .SendAsync("ReportePendiente", new
+                    {
+                        ReporteId = reporte.Id,
+                        Candidata = primeraCandidataId.Value,
+                        reporte.Descripcion,
+                        reporte.Latitud,
+                        reporte.Longitud,
+                        Direccion = reporte.Direccion,
+                        usuarioNombre = $"{u.Nombre} {u.Apellido}".Trim(),
+                        usuarioCi = u.Ci,
+                        usuarioCelular = u.Celular,
+                        usuarioEmail = u.Correo,
+                    }, ct);
+            }
         }
 
         return CreatedAtAction(nameof(ObtenerReportePorId), new { id = reporte.Id }, new
@@ -656,8 +666,7 @@ public partial class UsuariosController : ControllerBase
         var existe = await _db.Usuarios.AsNoTracking().AnyAsync(u => u.Correo.ToLower() == correo, ct);
         if (!existe)
         {
-            // Responder 202 para no filtrar correos existentes
-            return Accepted(new { mensaje = "Si el correo existe, se envió un código OTP." });
+            return NotFound(new { mensaje = "No existe la cuenta con ese correo." });
         }
 
         var otp = RandomNumberGenerator.GetInt32(100000, 1000000).ToString();
@@ -669,7 +678,7 @@ public partial class UsuariosController : ControllerBase
                         <p>Vence en 10 minutos.</p>";
         await _emailSender.SendAsync(correo, asunto, cuerpo, ct);
 
-        return Accepted(new { mensaje = "Si el correo existe, se envió un código OTP." });
+        return Accepted(new { mensaje = "Se envió un código al correo." });
     }
 
     [HttpPost("contrasena/recuperar/verificar")]

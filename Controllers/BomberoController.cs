@@ -63,7 +63,7 @@ public class BomberoController : ControllerBase
     {
         var rechazadas = _rechazosPorReporte.GetOrAdd(reporte.Id, _ => new HashSet<int>());
         var ordenPrimario = await ObtenerEstacionesOrdenadasAsync(reporte, ct);
-        var candidata = ordenPrimario.FirstOrDefault(e => !rechazadas.Contains(e.Id));
+        var candidata = ordenPrimario.FirstOrDefault(e => !rechazadas.Contains(e.Id) && e.Estado); // asegura activa
         if (candidata != null) return candidata;
 
         var point = _geometryFactory.CreatePoint(new Coordinate(reporte.Longitud!.Value, reporte.Latitud!.Value));
@@ -73,7 +73,7 @@ public class BomberoController : ControllerBase
             .OrderBy(e => e.Cobertura!.Distance(point))
             .ToListAsync(ct);
 
-        return fallback.FirstOrDefault(e => !rechazadas.Contains(e.Id));
+        return fallback.FirstOrDefault(e => !rechazadas.Contains(e.Id) && e.Estado); // asegura activa
     }
 
     [HttpPost("reportes/{id:int}/aceptar")]
@@ -84,9 +84,12 @@ public class BomberoController : ControllerBase
         var reporte = await _db.Reportes.FirstOrDefaultAsync(r => r.Id == id, ct);
         if (reporte == null) return NotFound();
         if (reporte.Estado == "ACEPTADO") return Ok(new { mensaje = "Ya aceptado." });
+
         var siguiente = await ObtenerSiguienteCandidataAsync(reporte, ct);
-        if (siguiente == null) return BadRequest(new { mensaje = "No hay estaci�n candidata." });
-        if (siguiente.IdUsuario != uid.Value) return Forbid("La estaci�n candidata no pertenece al usuario.");
+        if (siguiente == null) return BadRequest(new { mensaje = "No hay estación candidata activa." });
+        if (!siguiente.Estado) return BadRequest(new { mensaje = "La estación candidata está de baja." });
+        if (siguiente.IdUsuario != uid.Value) return Forbid("La estación candidata no pertenece al usuario.");
+
         var asign = new Asignacion
         {
             IdEstacion = siguiente.Id,
