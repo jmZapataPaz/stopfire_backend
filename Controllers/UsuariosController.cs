@@ -494,23 +494,43 @@ public partial class UsuariosController : ControllerBase
     [HttpPost("reportes/{id:int}/confirm")]
     public async Task<IActionResult> ConfirmarReporte(int id, CancellationToken ct)
     {
-        var r = await _db.Reportes.FindAsync(new object[] { id }, ct);
-        if (r is null) return NotFound();
+        var userId = TryGetUserIdFromToken();
+        if (userId is null) return Unauthorized(new { mensaje = "Token inválido." });
 
-        var curr = r.Confirmaciones ?? 0;
-        r.Confirmaciones = curr <= 0 ? 1 : curr + 1;
+        var r = await _db.Reportes.FirstOrDefaultAsync(x => x.Id == id, ct);
+        if (r is null) return NotFound(new { mensaje = "Reporte no encontrado." });
 
+        var yaConfirmo = await _db.ConfirmacionesReporte
+            .AsNoTracking()
+            .AnyAsync(c => c.IdReporte == id && c.IdUsuario == userId.Value, ct);
+        
+        if (yaConfirmo)
+        {
+            return Conflict(new { mensaje = "Ya confirmaste este incidente. Aguarda la llegada de los bomberos." });
+        }
+        var confirmacion = new ConfirmacionReporte
+        {
+            IdReporte = id,
+            IdUsuario = userId.Value,
+            FechaConfirmacion = DateTime.UtcNow
+        };
+        _db.ConfirmacionesReporte.Add(confirmacion);
+        r.Confirmaciones = (r.Confirmaciones ?? 0) + 1;
         await _db.SaveChangesAsync(ct);
 
-        var riesgo = Math.Min(100, (r.Confirmaciones ?? 0) * 20);
         await _hub.Clients.All.SendAsync("ReporteConfirmado", new
         {
-            id = r.Id,
-            confirmaciones = r.Confirmaciones ?? 0,
-            riesgoPercent = riesgo
+            Id = r.Id,
+            Confirmaciones = r.Confirmaciones,
+            ConfirmadoPor = userId.Value
         }, ct);
 
-        return Ok(new { id = r.Id, confirmaciones = r.Confirmaciones ?? 0, riesgoPercent = riesgo });
+        return Ok(new
+        {
+            mensaje = "Confirmación registrada.",
+            reporteId = r.Id,
+            confirmaciones = r.Confirmaciones
+        });
     }
 
     [HttpGet("reportes")]
@@ -710,5 +730,23 @@ public partial class UsuariosController : ControllerBase
         _cache.Remove(key);
 
         return Ok(new { mensaje = "Contraseña actualizada." });
+    }
+
+    [HttpGet("reportes/{id:int}/verificar-confirmacion")]
+    public async Task<IActionResult> VerificarConfirmacion(int id, CancellationToken ct)
+    {
+        var userId = TryGetUserIdFromToken();
+        if (userId is null) return Unauthorized(new { mensaje = "Token inválido." });
+
+        var r = await _db.Reportes
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.Id == id, ct);
+        if (r is null) return NotFound(new { mensaje = "Reporte no encontrado." });
+
+        var yaConfirmo = await _db.ConfirmacionesReporte
+            .AsNoTracking()
+            .AnyAsync(c => c.IdReporte == id && c.IdUsuario == userId.Value, ct);
+
+        return Ok(new { yaConfirmo });
     }
 }

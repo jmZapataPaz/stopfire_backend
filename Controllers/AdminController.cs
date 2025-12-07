@@ -99,7 +99,8 @@ public class AdminController : ControllerBase
                 u.Celular,
                 u.RolId,
                 u.UltimoIngreso,
-                u.Estado // NUEVO
+                u.Estado,
+                TieneEstacionAsignada = _db.Estaciones.Any(e => e.IdUsuario == u.Id)
             })
             .ToListAsync(ct);
 
@@ -182,7 +183,6 @@ public class AdminController : ControllerBase
         _db.Estaciones.Add(estacion);
         await _db.SaveChangesAsync(ct);
 
-        // NUEVO: registrar propietario inicial
         var resp = await _db.Usuarios.AsNoTracking()
             .Where(u => u.Id == userId)
             .Select(u => new { u.Id, Nombre = (u.Nombre + " " + u.Apellido).Trim() })
@@ -257,7 +257,6 @@ public class AdminController : ControllerBase
         var e = await _db.Estaciones.FirstOrDefaultAsync(x => x.Id == id, ct);
         if (e is null) return NotFound();
 
-        // NUEVO: capturar propietario anterior ANTES de modificar
         var propietarioAnteriorId = e.IdUsuario;
 
         if (dto.IdUsuario.HasValue)
@@ -294,7 +293,6 @@ public class AdminController : ControllerBase
 
         await _db.SaveChangesAsync(ct);
 
-        // NUEVO: si cambió el propietario, registrar el cambio
         if (dto.IdUsuario.HasValue && dto.IdUsuario.Value != propietarioAnteriorId)
         {
             var nuevoResp = await _db.Usuarios.AsNoTracking()
@@ -336,8 +334,6 @@ public class AdminController : ControllerBase
     {
         var e = await _db.Estaciones.FirstOrDefaultAsync(x => x.Id == id, ct);
         if (e is null) return NotFound();
-
-        // Dar de baja: estado=false en vez de borrar
         e.Estado = false;
         await _db.SaveChangesAsync(ct);
         return NoContent();
@@ -374,7 +370,6 @@ public class AdminController : ControllerBase
         return Ok(list);
     }
 
-    // NUEVO: cambiar estado (dar de baja / activar)
     [HttpPut("usuarios/bomberos/{id:int}/estado")]
     public async Task<IActionResult> CambiarEstadoBombero(int id, [FromBody] JsonObject body, CancellationToken ct)
     {
@@ -418,7 +413,7 @@ public class AdminController : ControllerBase
     public async Task<IActionResult> CrearHidrante([FromBody] AdminCrearHidranteDto dto, CancellationToken ct)
     {
         var p = new Point(dto.Longitud, dto.Latitud) { SRID = 4326 };
-        var estado = dto.Estado ?? true; // fuerza true si viene null
+        var estado = dto.Estado ?? true; 
 
         var h = new Hidrante
         {

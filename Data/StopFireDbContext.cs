@@ -17,6 +17,7 @@ public class StopFireDbContext : DbContext
     public DbSet<Asignacion> Asignaciones => Set<Asignacion>();
     public DbSet<Hidrante> Hidrantes => Set<Hidrante>();
     public DbSet<RegistroCapitanEstacion> RegistrosCapitanes { get; set; }
+    public DbSet<ConfirmacionReporte> ConfirmacionesReporte => Set<ConfirmacionReporte>();
 
     private static double? ParseNullableDouble(string? v)
         => string.IsNullOrWhiteSpace(v) ? null :
@@ -180,6 +181,29 @@ public class StopFireDbContext : DbContext
             e.Property(r => r.FechaCreacion)
              .HasConversion(utcConverter)
              .HasColumnType("timestamp with time zone"); 
+        });
+
+        modelBuilder.Entity<ConfirmacionReporte>(b =>
+        {
+            b.ToTable("confirmacion_reporte");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            b.Property(x => x.IdReporte).HasColumnName("id_reporte").IsRequired();
+            b.Property(x => x.IdUsuario).HasColumnName("id_usuario").IsRequired();
+            b.Property(x => x.FechaConfirmacion).HasColumnName("fecha_confirmacion").IsRequired();
+            
+            b.HasOne(x => x.Reporte)
+                .WithMany()
+                .HasForeignKey(x => x.IdReporte)
+                .OnDelete(DeleteBehavior.Cascade);
+            
+            b.HasOne(x => x.Usuario)
+                .WithMany()
+                .HasForeignKey(x => x.IdUsuario)
+                .OnDelete(DeleteBehavior.Cascade);
+            
+            // Índice único: un usuario solo puede confirmar un reporte una vez
+            b.HasIndex(x => new { x.IdReporte, x.IdUsuario }).IsUnique();
         });
     }
 }
